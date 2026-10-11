@@ -180,3 +180,14 @@ def test_mixed_type_columns_agree_in_sqlite_and_csv(tmp_path):
     assert stored == [("1_L1", "1e-05", 0.0, 1, "[1, 2]"), ("1_L2", "abc", 0.5, None, None)]
     with open(tmp_path / "t.csv", newline="") as f:
         assert list(csv.reader(f))[1:] == [["1_L1", "1e-05", "0.0", "1", "[1, 2]"], ["1_L2", "abc", "0.5", "", ""]]
+
+
+def test_default_json_lookup_uses_job_and_run(tmp_path, experiment_dir):
+    # Without a collect block: <exp_dir>/<job_id>_<run>/result*.json, as written by '{save_dir}_{run}'
+    run_dir = experiment_dir / "syn" / "500_A0_L1"
+    run_dir.mkdir()
+    (run_dir / "result.json").write_text(json.dumps({"metrics": {"energy": -1.5}}))
+    cfg = make_config(tmp_path, experiment_dir)
+    slurmdunk("collect", cfg, "--output-dir", tmp_path / "o", cwd=tmp_path, check=True)
+    rows = load(tmp_path / "o" / "results.sqlite")[1]
+    assert rows["500_A0_L1"]["energy"] == -1.5 and rows["500_A0_L2"]["energy"] is None

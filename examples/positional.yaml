@@ -2,11 +2,11 @@
 # flags (see "Positional arguments" in README.md). Each run calls, for example:
 #   python3 print_args.py --mode demo --Q2 10 --save_dir <...> 0.5 0.01
 #
-# Run from the SlurmDunk directory; set partition, account and result_database_path first.
+# Relative paths are taken from this file's folder; set partition and account first.
 
 execution:
   interpreter: python3
-  executable: examples/print_args.py
+  executable: print_args.py          # relative paths are taken from this file's folder
 
 slurm:
   job-name: slurmdunk_positional
@@ -17,11 +17,11 @@ slurm:
   cpus-per-task: 1
 
 experiment:
-  result_database_path: /scratch/myproject/slurmdunk_examples   # <- absolute and writable
+  result_database_path: results      # <- for real runs, somewhere roomy, e.g. under /scratch
   experiment_name: positional
   slrm_output_dir: SLURM_OUTPUT
   tracking_args:
-    save_dir: "{save_dir}_{__indicator}"
+    save_dir: "{save_dir}_{run}"
 
 args:
   mode: demo
@@ -33,7 +33,7 @@ outer_loops:
 
 inner_loop:
   type: tabular_file
-  file_path: examples/points.txt
+  file_path: points.txt
   arg_names: [x, Q2]
 
 positional_args: [scale, x]        # passed in this order, after the flags

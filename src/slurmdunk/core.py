@@ -661,7 +661,9 @@ def generate_slurm_script(
     # The same signature for the script's EXEC_SIG="..." line. Positional values may hold
     # spaces, quotes or $, so they are escaped and bash recovers exactly exec_sig_str;
     # the other parts are emitted as before, keeping existing scripts byte-identical.
-    exec_sig_bash = " ".join(p for p in exec_sig_components + [bash_dq_escape(fixed_positional_str)] if p)
+    exec_sig_bash = " ".join(
+        p for p in exec_sig_components[:3] + [bash_dq_escape(fixed_args_str), bash_dq_escape(fixed_positional_str)] if p
+    )
 
     checkpoint_dir = (
         Path(experiment_cfg.checkpoint_dir) if experiment_cfg else Path("checkpoints").resolve()
@@ -674,6 +676,8 @@ def generate_slurm_script(
         "exec_dir": exec_dir,
         "flags_str": flags_str,
         "fixed_args_str": fixed_args_str,
+        # The same string for embedding inside bash double quotes (quoted values can hold $ or ")
+        "fixed_args_bash": bash_dq_escape(fixed_args_str),
         "exec_sig_str": exec_sig_str,
         "exec_sig_bash": exec_sig_bash,
         "exp_args_block": exp_args_block,

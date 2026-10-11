@@ -47,3 +47,6 @@ htmlcov/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints
+
+# Results of the shipped examples
+examples/results/

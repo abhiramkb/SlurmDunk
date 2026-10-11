@@ -10,6 +10,20 @@ from pydantic import AliasChoices, BaseModel, Field, ValidationError, Validation
 from .collect import DEFAULT_JSON_PATH, RUN_INFO_COLUMNS, pattern_matcher
 from .utils import check_positional_value
 
+def resolve_config_path(path: Union[str, Path], info: ValidationInfo) -> Path:
+    """Makes a relative path absolute, taken from the config file's folder.
+
+    validate_config puts that folder in the validation context as 'base_dir'; without
+    it (a model validated directly) the current directory is used. Absolute paths are
+    returned unchanged, so a config gives the same paths wherever slurmdunk is run.
+    """
+    path = Path(path)
+    if path.is_absolute():
+        return path
+    base = info.context.get("base_dir") if info.context else None
+    return Path(base) / path if base else path.resolve()
+
+
 def determine_loop_q(cfg: dict) -> bool:
     """Determines if loop mode is active based on config flags and structure."""
     mode_index = 0 # 0 -> no loops, 1 -> inner loop only, 2 -> inner and outer loops
@@ -117,6 +131,7 @@ class TabularOuterLoop(BaseModel):
     @field_validator("file_path")
     @classmethod
     def check_file_exists(cls, v: Path, info: ValidationInfo) -> Path:
+        v = resolve_config_path(v, info)
         # Reads 'check_files' from context, defaulting to True if not provided
         check_files = info.context.get("check_files", True) if info.context else True        
         if check_files and not v.is_file():
@@ -154,6 +169,17 @@ class ExecutionConfig(BaseModel):
     multithreading_level: Optional[int] = Field(default=None, ge=1)
     # Optional hard ceiling on concurrency, e.g. to stay within --mem.
     max_parallel_tasks: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("executable")
+    @classmethod
+    def resolve_executable(cls, v: str, info: ValidationInfo) -> str:
+        """A path to the program is taken from the config file's folder. A bare name
+        without an interpreter (e.g. 'mytool') is a command found on PATH, kept as is,
+        unless a file of that name sits next to the config."""
+        if info.data.get("interpreter") or "/" in v:
+            return str(resolve_config_path(v, info))
+        local = resolve_config_path(v, info)
+        return str(local) if local.is_file() else v
 
 
 class SlurmConfig(BaseModel):
@@ -268,6 +294,8 @@ class TabularInnerLoop(BaseModel):
     @field_validator("file_path")
     @classmethod
     def check_inner_file(cls, v: Optional[Path], info: ValidationInfo) -> Optional[Path]:
+        if v is not None:
+            v = resolve_config_path(v, info)
         # Reads 'check_files' from context, defaulting to True if not provided
         check_files = info.context.get("check_files", True) if info.context else True
         
@@ -304,6 +332,12 @@ class ExperimentConfig(BaseModel):
     experiment_name: str
     slrm_output_dir: str
     tracking_args: Optional[Dict[str, str]] = None
+
+    @field_validator("result_database_path")
+    @classmethod
+    def resolve_results_path(cls, v: str, info: ValidationInfo) -> str:
+        # Must be absolute: the generated script changes into the executable's folder
+        return str(resolve_config_path(v, info))
 
     @computed_field
     @property
@@ -345,8 +379,15 @@ class PatternSpec(BaseModel):
 class JsonSpec(BaseModel):
     model_config = {"extra": "forbid"}
 
-    # Placeholders: any argument a run printed, plus {job_id}, {indicator}, {exp_dir}
+    # Placeholders: any argument a run printed, plus {job_id}, {run} (or {indicator}), {exp_dir}
     path: str = DEFAULT_JSON_PATH
+
+    @field_validator("path")
+    @classmethod
+    def resolve_json_path(cls, v: str, info: ValidationInfo) -> str:
+        """A relative path is taken from the config file's folder; one starting with a
+        placeholder (e.g. '{json}', '{exp_dir}/...') is resolved per run instead."""
+        return v if v.startswith(("/", "{")) else str(resolve_config_path(v, info))
 
 
 class CollectConfig(BaseModel):
@@ -412,6 +453,11 @@ class AppConfig(BaseModel):
     # into one table instead of generating a SLURM sweep. See validate_dataset_processing_rules.
     process_datasets: bool = False
     output_file_path: Optional[Path] = None  # Where the combined table is written
+
+    @field_validator("output_file_path")
+    @classmethod
+    def resolve_output_file_path(cls, v: Optional[Path], info: ValidationInfo) -> Optional[Path]:
+        return None if v is None else resolve_config_path(v, info)
     process: Optional[ProcessConfig] = None  # Renaming/cuts applied to the combined table
 
     @model_validator(mode="before")
@@ -635,10 +681,40 @@ class AppConfig(BaseModel):
 
 # --- 4. Replacement Validation Entrypoint ---
 
+# Spellings that still work but are going away in 1.0; each warning is printed once per config
+_WARNED: set = set()
+
+
+def deprecation_warnings(cfg: Any) -> List[str]:
+    """Deprecated spellings used in a raw config, as one message each."""
+    messages = []
+    if not isinstance(cfg, dict):
+        return messages
+    if "loopQ" in cfg:
+        messages.append("'loopQ' is deprecated and will be removed in 1.0: the mode follows from "
+                        "which loop sections are present.")
+    execution = cfg.get("execution")
+    if isinstance(execution, dict) and "language" in execution:
+        messages.append("'execution.language' is deprecated; use 'execution.interpreter'.")
+    experiment = cfg.get("experiment")
+    tracking = experiment.get("tracking_args") if isinstance(experiment, dict) else None
+    if isinstance(tracking, dict) and any("{__indicator}" in str(v) for v in tracking.values()):
+        messages.append("'{__indicator}' in tracking_args is deprecated; use '{run}'.")
+    return messages
+
+
 def validate_config(cfg: dict, config_path: str, dryrunQ: bool) -> AppConfig:
-    """Validates structure, types, and file existence using Pydantic."""
+    """Validates structure, types, and file existence using Pydantic.
+
+    Relative paths in the config are taken from the config file's folder.
+    """
+    context = {"check_files": not dryrunQ, "base_dir": str(Path(config_path).resolve().parent)}
     try:
-        validated_cfg = AppConfig.model_validate(cfg, context={"check_files": not dryrunQ})
+        validated_cfg = AppConfig.model_validate(cfg, context=context)
+        for message in deprecation_warnings(cfg):
+            if (str(config_path), message) not in _WARNED:
+                _WARNED.add((str(config_path), message))
+                print(f"[WARNING] {config_path}: {message}", file=sys.stderr)
         return validated_cfg
     except ValidationError as e:
         print(f"\n[CONFIG ERROR] Validation failed for '{config_path}':", file=sys.stderr)

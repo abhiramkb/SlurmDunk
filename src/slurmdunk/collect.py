@@ -26,8 +26,8 @@ RUN_INFO_COLUMNS = (
 )
 
 # Used when the config does not say where a run's JSON is: the per-run directory
-# made by the conventional '{save_dir}_{__indicator}' tracking arg.
-DEFAULT_JSON_PATH = "{exp_dir}/{job_id}_{indicator}/result*.json"
+# made by the conventional '{save_dir}_{run}' tracking arg.
+DEFAULT_JSON_PATH = "{exp_dir}/{job_id}_{run}/result*.json"
 
 FORMAT_CHOICES = {"sqlite": ["sqlite"], "csv": ["csv"], "both": ["sqlite", "csv"]}
 
@@ -544,7 +544,8 @@ def collect_results(
             if json_path is not None:
                 # Built-ins take precedence over arguments of the same name
                 placeholders = dict(run["args"])
-                placeholders.update(job_id=base_job_id, indicator=run["indicator"], exp_dir=str(exp_dir))
+                placeholders.update(job_id=base_job_id, run=run["indicator"], indicator=run["indicator"],
+                                    exp_dir=str(exp_dir))
                 doc, problem = load_json(json_path, placeholders)
                 if doc is not None:
                     for column in merge_json(row, doc, reserved):

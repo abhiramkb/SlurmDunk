@@ -79,7 +79,7 @@ Pick the row that matches what you want and copy that file:
 | :--- | :--- | :--- |
 | Run one dipole over a list of kinematic points | `yaml_nlo_diff/dip_medianbk_mvgam,balsd_HERA.yaml` | **One job**, one run per line of the points file, done in sequence |
 | Scan 100 dipole replicas × all kinematic points | `yaml_nlo_diff/dip_kcbk_allbks_mvgam,balsd_HERA.yaml` | **A job array**, one task per replica, each task sweeping every point |
-| Do a single run, one set of numbers | any `*_medianbk_*` file: delete `inner_loop`, add `loopQ: false`, put `Q`/`beta`/`x` into `args` | One job, one run |
+| Do a single run, one set of numbers | any `*_medianbk_*` file: delete `inner_loop`, put `Q`/`beta`/`x` into `args` | One job, one run |
 
 `yaml_nlo_diff/` has 32 ready configs covering dip / dipLO / diptrip / trip against the various
 dipole fits. The closest one is usually a 3-line edit away from what you need.
@@ -117,8 +117,8 @@ experiment:                           # where results go
   experiment_name: median_mvgam_balsd # subdirectory name, also used in the script filename
   slrm_output_dir: SLURM_OUTPUT
   tracking_args:                      # extra args handed to your code per run
-    save_dir: "{save_dir}_{__indicator}"
-    json: "{save_dir}_{__indicator}/result.json"
+    save_dir: "{save_dir}_{run}"
+    json: "{save_dir}_{run}/result.json"
 
 inner_loop:                           # ONE RUN PER LINE of this file
   file_path: /projappl/lappi/abhiram/trip/HERA_kinematic_points_highQ_smallx.txt

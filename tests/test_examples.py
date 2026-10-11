@@ -1,11 +1,11 @@
-"""The shipped examples generate, run and collect. They use paths relative to the
-repository, so this also covers relative executables and input files."""
+"""The shipped examples generate, run and collect. Their paths are relative to their
+own folder, so this also covers config-relative executables, inputs and results."""
 import csv
 import re
+import shutil
 from pathlib import Path
 
 import pytest
-import yaml
 
 from conftest import generate, needs_bash, run_script, slurmdunk
 
@@ -15,21 +15,22 @@ pytestmark = needs_bash
 
 @pytest.mark.parametrize("name", ["sweep", "positional"])
 def test_example_runs(tmp_path, name):
-    # Relative paths in the example resolve as they would from the repository root
-    (tmp_path / "examples").symlink_to(EXAMPLES)
-    cfg = yaml.safe_load((EXAMPLES / f"{name}.yaml").read_text())
-    cfg["experiment"]["result_database_path"] = str(tmp_path / "db")
-    config = tmp_path / f"{name}.yaml"
-    config.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    # The examples as shipped, copied so their results (relative to their folder) stay in tmp_path,
+    # and generated from an unrelated directory: relative paths are taken from the config's folder
+    examples = tmp_path / "examples"
+    shutil.copytree(EXAMPLES, examples, ignore=shutil.ignore_patterns("results", "__pycache__"))
+    config = examples / f"{name}.yaml"
+    elsewhere = tmp_path / "elsewhere"
 
-    script, out = generate(config, tmp_path)
+    script, out = generate(config, elsewhere)
     assert script, out
-    logs = tmp_path / "db" / name / "SLURM_OUTPUT"
+    assert f"{examples.resolve()}/print_args.py" in script.read_text()
+    logs = examples / "results" / name / "SLURM_OUTPUT"
     for task in ("0", "1"):
-        assert run_script(script, logs / f"{name}_4242_{task}.out", tmp_path, SLURM_ARRAY_TASK_ID=task) == 0
+        assert run_script(script, logs / f"{name}_4242_{task}.out", elsewhere, SLURM_ARRAY_TASK_ID=task) == 0
 
-    assert slurmdunk("collect", config, "--format", "csv", cwd=tmp_path).returncode == 0
-    with open(tmp_path / "db" / name / "results.csv", newline="") as f:
+    assert slurmdunk("collect", config, "--format", "csv", cwd=elsewhere).returncode == 0
+    with open(examples / "results" / name / "results.csv", newline="") as f:
         rows = {r["job_id"]: r for r in csv.DictReader(f)}
     assert len(rows) == 6 and {r["status"] for r in rows.values()} == {"completed"}
     assert rows["4242_A1_L2"]["scale"] == "2.0" and rows["4242_A1_L2"]["x"] == "0.001"

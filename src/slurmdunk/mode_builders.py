@@ -4,7 +4,7 @@ from textwrap import indent
 from typing import Any, Dict, List, Optional, Tuple, Union
 from .arg_transform import _apply_transform
 from .utils import (
-    bash_double_quote, check_positional_value, format_cli_args, split_positional, strip_hyphens,
+    bash_double_quote, bash_dq_escape, check_positional_value, format_cli_args, split_positional, strip_hyphens,
     tracking_template_to_bash,
 )
 
@@ -432,7 +432,7 @@ def build_inner_driver(
     exec_cmd = build_exec_command(
         exec_cfg,
         ctx["flags_str"],
-        ctx["fixed_args_str"],
+        ctx["fixed_args_bash"],
         "$outer_args_str $inner_args_str",
         pos["exec_slot"],
     )
@@ -450,7 +450,7 @@ def build_inner_driver(
         RUN_INNER_TASK_TMPL
         .replace("@@INDICATOR_PREFIX@@", indicator_prefix)
         .replace("@@EXP_ARGS_BLOCK@@", ctx["exp_args_block"])
-        .replace("@@FIXED_ARGS@@", ctx["fixed_args_str"])
+        .replace("@@FIXED_ARGS@@", ctx["fixed_args_bash"])
         .replace("@@CONCURRENCY_INFO@@", concurrency_info)
         .replace("@@EXEC_CMD@@", exec_cmd),
         pos,
@@ -531,15 +531,13 @@ def build_exec_command(
     positional_str goes straight after the executable ('positional_placement:
     first'); with the default placement the caller appends positionals at the end.
 
-    A relative executable is made absolute, as EXEC_SIG already is: the generated
-    script changes into the executable's directory before running it, where the
-    relative path would no longer point at it. Absolute paths are kept as written.
+    The executable is already absolute (or a bare command on PATH): config
+    validation resolves relative paths against the config file's folder.
     """
-    executable = Path(exec_cfg.executable)
     cmd_parts = [
         exec_cfg.interpreter,
         flags_str,
-        str(executable if executable.is_absolute() else executable.resolve()),
+        str(exec_cfg.executable),
         positional_str,
         fixed_args_str,
         extra_args_str,
@@ -556,7 +554,7 @@ def build_single_mode(ctx: Dict[str, Any], config: AppConfig) -> Optional[str]:
 
     pos = build_positional(config)
     exec_cmd = build_exec_command(
-        ctx["exec_cfg"], ctx["flags_str"], ctx["fixed_args_str"], "", pos["exec_slot"]
+        ctx["exec_cfg"], ctx["flags_str"], ctx["fixed_args_bash"], "", pos["exec_slot"]
     )
     return f"""{ctx['common_header']}
 
@@ -578,11 +576,11 @@ echo "======================= SLURM RUN LEGEND ======================="
 echo "Mode: Single Run (loopQ = false)"
 echo "Working Directory: {ctx['exec_dir']}"
 echo "Exec Path: {ctx['exec_path']}"
-echo "Flags: {ctx['fixed_args_str']}"{pos['legend']}
+echo "Flags: {ctx['fixed_args_bash']}"{pos['legend']}
 echo "================================================================"
 
 {ctx['exp_args_block']}
-print_args "$indicator" "{ctx['fixed_args_str']} $exp_args"{pos['single']}
+print_args "$indicator" "{ctx['fixed_args_bash']} $exp_args"{pos['single']}
 
 {{
     starttime=$(date +%s%N)
@@ -704,7 +702,7 @@ def build_inner_loop_mode(ctx: Dict[str, Any], config: AppConfig) -> Optional[st
     bash_inner_args, bash_inner_line_nos = [], []
     for line_no, item_dict in pending_tasks:
         args_str = format_cli_args(split_positional(item_dict, config.positional_args)[0])
-        bash_inner_args.append(f'    "{args_str}"')
+        bash_inner_args.append(f'    "{bash_dq_escape(args_str)}"')
         bash_inner_line_nos.append(f"    {line_no}")
 
     args_array_block = "\n".join(bash_inner_args)
@@ -739,7 +737,7 @@ echo "======================= SLURM RUN LEGEND ======================="
 echo "Mode: Inner Loop Only"
 echo "Working Directory: {ctx['exec_dir']}"
 echo "Exec Path: {ctx['exec_path']}"
-echo "Fixed Args: {ctx['fixed_args_str']}"
+echo "Fixed Args: {ctx['fixed_args_bash']}"
 echo "Inner Args: {arg_names_display}"{pos['legend']}
 echo "Pending Tasks: {len(pending_tasks)} / {len(evaluated_inner)}"
 echo "================================================================"
@@ -833,8 +831,8 @@ def build_job_array_mode(
     for combo_dict in outer_combinations:
         outer_args_str = format_cli_args(split_positional(combo_dict, config.positional_args)[0])
         outer_desc = ", ".join(f"{strip_hyphens(k)}={v}" for k, v in combo_dict.items())
-        bash_outer_args.append(f'    "{outer_args_str}"')
-        bash_outer_descs.append(f'    "{outer_desc}"')
+        bash_outer_args.append(f'    "{bash_dq_escape(outer_args_str)}"')
+        bash_outer_descs.append(f'    "{bash_dq_escape(outer_desc)}"')
 
     outer_args_array_block = "\n".join(bash_outer_args)
     outer_descs_array_block = "\n".join(bash_outer_descs)
@@ -842,7 +840,7 @@ def build_job_array_mode(
     # 5. Build inner parameter array
     bash_inner_args, all_inner_arg_names = [], set()
     for item in evaluated_inner:
-        bash_inner_args.append(f'    "{format_cli_args(split_positional(item, config.positional_args)[0])}"')
+        bash_inner_args.append(f'    "{bash_dq_escape(format_cli_args(split_positional(item, config.positional_args)[0]))}"')
         all_inner_arg_names.update(item.keys())
 
     inner_args_array_block = "\n".join(bash_inner_args)
@@ -908,7 +906,7 @@ echo "Array Task ID: $TASK_ID"
 echo "Outer Combinations: ${{#MY_OUTER_IDS[@]}} (indices: ${{MY_OUTER_IDS[*]}})"
 echo "Working Directory: {ctx['exec_dir']}"
 echo "Exec Path: {ctx['exec_path']}"
-echo "Fixed Args: {ctx['fixed_args_str']}"
+echo "Fixed Args: {ctx['fixed_args_bash']}"
 echo "Inner Args: {arg_names_display}"{pos['legend']}
 echo "Executing Subtasks: {len(pending_task_ids)} / {len(outer_combinations)} Outer Runs"
 echo "======================================================================"

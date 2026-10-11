@@ -88,11 +88,11 @@ Run `slurmdunk <subcommand> --help` for a subcommand's own flags.
 
 ## Execution Modes
 
-The mode is derived from the config; `loopQ` may set it explicitly, otherwise it is inferred from which loop sections are present.
+The mode is inferred from which loop sections are present. (`loopQ` can still force it, but is deprecated and will be removed in 1.0.)
 
 | Mode | Condition | Output | Log prefix |
 | :--- | :--- | :--- | :--- |
-| **Single run** | `loopQ: false`, or no loop sections | `submit_single_<exp>_<timestamp>.sh` | `[SINGLE_out]` |
+| **Single run** | no loop sections | `submit_single_<exp>_<timestamp>.sh` | `[SINGLE_out]` |
 | **Inner loop only** | `inner_loop` present, no `outer_loops` | `submit_inner_<exp>_<timestamp>.sh` | `[L1_out]`, `[L2_out]`, … |
 | **Job array** | `inner_loop` and `outer_loops` present | `submit_array_<exp>_<timestamp>.sh` | `[A0_L1_out]`, `[A0_L2_out]`, … |
 
@@ -102,13 +102,17 @@ In job array mode the outer combinations form the SLURM array (one task per Cart
 
 ## Configuration Schema
 
+**Paths.** A relative path anywhere in a config (`executable`, loop `file_path`s, `result_database_path`, `output_file_path`, a relative `collect.json.path`) is taken from the config file's own folder. So a config behaves the same wherever `slurmdunk` is run from.
+
+**Argument values are passed literally.** Values with spaces, quotes, `$` or backticks reach the program exactly as written in the config, and `$VAR` inside an argument value is not expanded. Use `execution.env_vars` or `preamble` for anything that should come from the environment at run time.
+
 ### Top level
 
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `execution` | Object | **Yes** | Interpreter, executable, flags, modules, environment variables. |
 | `slurm` | Object | **Yes** | Translated into `#SBATCH --<key>=<value>` directives. |
-| `loopQ` | Boolean | Optional | Force single-run (`false`) or loop (`true`) mode. Inferred when omitted. |
+| `loopQ` | Boolean | Deprecated | Forces single-run (`false`) or loop (`true`) mode; the mode is inferred anyway. Warns; removed in 1.0. |
 | `inner_loop` | Object | Conditional | Required in loop mode. The sequential sweep run inside one SLURM task. |
 | `outer_loops` | Array | Optional | Turns the run into a SLURM job array over the Cartesian product of these blocks. |
 | `experiment` | Object | Optional | Result/checkpoint directory layout and tracking arguments. |
@@ -121,8 +125,8 @@ In job array mode the outer combinations form the SLURM array (one task per Cart
 
 | Field | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `executable` | String | **required** | Path to the program or script. Its parent directory becomes the working directory. |
-| `interpreter` | String | `null` | Command that runs the executable, e.g. `julia`, `python3`. Omit for a directly executable file. Also accepted under its legacy name `language`; prefer `interpreter` in new configs. |
+| `executable` | String | **required** | Path to the program or script; a relative path is taken from the config file's folder. Its parent directory becomes the working directory. A bare name without an interpreter (e.g. `mytool`) is looked up on `PATH`. |
+| `interpreter` | String | `null` | Command that runs the executable, e.g. `julia`, `python3`. Omit for a directly executable file. The legacy name `language` still works but is deprecated (warns; removed in 1.0). |
 | `flags` | Array | `[]` | Interpreter flags placed before the executable, e.g. `["-u"]`. |
 | `modules` | Array | `[]` | `module load` calls emitted before execution. |
 | `env_vars` | Object | `{}` | Exported before execution. Values may reference SLURM variables, e.g. `"$SLURM_CPUS_PER_TASK"`. |
@@ -212,10 +216,10 @@ The value stays an integer until `template` is applied, so a format spec works f
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `result_database_path` | String | Root directory for results. |
+| `result_database_path` | String | Root directory for results; a relative path is taken from the config file's folder. |
 | `experiment_name` | String | Subdirectory under the root; also used in generated script names. |
 | `slrm_output_dir` | String | Subdirectory for SLURM logs. |
-| `tracking_args` | Object | Extra CLI arguments injected per run, supporting the placeholders `{result_database_path}`, `{experiment_name}`, `{slrm_output_dir}`, `{save_dir}` and `{__indicator}`. |
+| `tracking_args` | Object | Extra CLI arguments injected per run, supporting the placeholders `{result_database_path}`, `{experiment_name}`, `{slrm_output_dir}`, `{save_dir}` and `{run}` (the run's label, e.g. `A3_L2`; the older spelling `{__indicator}` still works but is deprecated). |
 
 This yields the layout:
 
@@ -254,7 +258,7 @@ experiment:
   experiment_name: timing
   slrm_output_dir: SLURM_OUTPUT
   tracking_args:
-    resfile: "{save_dir}_{__indicator}/res.dat"   # per-run output path
+    resfile: "{save_dir}_{run}/res.dat"   # per-run output path
 
 positional_args: [infile, resfile, rtol, repeats]
 ```
@@ -322,8 +326,8 @@ Outer loop reads dipole fit parameters from a table (one array task per row); ea
     "experiment_name": "allbks_mvgam_balsd",
     "slrm_output_dir": "SLURM_OUTPUT",
     "tracking_args": {
-      "save_dir": "{save_dir}_{__indicator}",
-      "json": "{save_dir}_{__indicator}/result.json"
+      "save_dir": "{save_dir}_{run}",
+      "json": "{save_dir}_{run}/result.json"
     }
   },
   "inner_loop": {
@@ -416,7 +420,6 @@ An explicit sweep works the same way and needs no data file:
 
 ```json
 {
-  "loopQ": false,
   "slurm": {
     "account": "lappi",
     "job-name": "single_dip",
@@ -626,7 +629,7 @@ At the end of a collect, the number of runs each pattern matched is printed, whi
 
 ### JSON output
 
-By default each run's JSON is looked for at `{exp_dir}/{job_id}_{indicator}/result*.json`, which is where the conventional `{save_dir}_{__indicator}` tracking argument puts it. Point elsewhere with `json.path`:
+By default each run's JSON is looked for at `{exp_dir}/{job_id}_{run}/result*.json`, which is where the conventional `{save_dir}_{run}` tracking argument puts it. Point elsewhere with `json.path`:
 
 ```yaml
 collect:
@@ -634,7 +637,7 @@ collect:
     path: "{json}"      # or the short form   json: "{json}"
 ```
 
-- **Placeholders:** the path may use any argument the run printed (`{json}`, `{save_dir}`, …), plus `{job_id}` (the SLURM job ID, as `$JOB_ID` in the script), `{indicator}` and `{exp_dir}`.
+- **Placeholders:** the path may use any argument the run printed (`{json}`, `{save_dir}`, …), plus `{job_id}` (the SLURM job ID, as `$JOB_ID` in the script), `{run}` (the run's label, e.g. `A3_L2`; `{indicator}` also works) and `{exp_dir}`. A path that doesn't start with `/` or a placeholder is taken from the config file's folder.
 - **Wildcards:** `*` and `?` pick the first match in sorted order.
 - **Turning it off:** `json: null` disables JSON collection.
 

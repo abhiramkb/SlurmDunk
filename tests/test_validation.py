@@ -47,3 +47,29 @@ def test_valid_config_loads():
                               "collect": {"patterns": ["time: {t} s"], "json": "{infile}"}}, "cfg.yaml", True)
     assert config.positional_args == ["infile"] and config.positional_placement == "last"
     assert config.argument_sources() == {"infile": ["fixed"], "n": ["fixed"]}
+
+
+# --------------------------------------------------------------------------- deprecations
+
+
+@pytest.mark.parametrize("extra, message", [
+    ({"loopQ": False}, "'loopQ' is deprecated"),
+    ({"execution": {"language": "python3", "executable": "/bin/true"}}, "'execution.language' is deprecated"),
+    ({"experiment": {"result_database_path": "/db", "experiment_name": "e", "slrm_output_dir": "o",
+                     "tracking_args": {"save_dir": "{save_dir}_{__indicator}"}}}, "use '{run}'"),
+])
+def test_deprecated_spellings_still_work_and_warn_once(extra, message, capsys, tmp_path):
+    config_path = str(tmp_path / "old.yaml")
+    config = validate_config({**BASE, **extra}, config_path, True)
+    assert config is not None
+    assert message in capsys.readouterr().err
+    validate_config({**BASE, **extra}, config_path, True)
+    assert message not in capsys.readouterr().err  # once per config
+
+
+def test_current_spellings_do_not_warn(capsys, tmp_path):
+    validate_config({**BASE, "execution": {"interpreter": "python3", "executable": "/bin/true"},
+                     "experiment": {"result_database_path": "/db", "experiment_name": "e", "slrm_output_dir": "o",
+                                    "tracking_args": {"save_dir": "{save_dir}_{run}"}}},
+                    str(tmp_path / "new.yaml"), True)
+    assert "deprecated" not in capsys.readouterr().err

@@ -1,18 +1,16 @@
 # A small sweep: 2 outer values x 3 inner points = 6 runs of examples/print_args.py,
 # which just prints the arguments it receives.
 #
-# Run from the SlurmDunk directory, since the paths below are relative to it:
-#   slurmdunk generate examples/sweep.yaml --dryrun     # inspect the generated script
-#   slurmdunk generate examples/sweep.yaml --submit     # submit it
-#   slurmdunk collect examples/sweep.yaml --format both # gather results once it has run
+# Relative paths below are taken from this file's folder, so this works from anywhere:
+#   slurmdunk generate path/to/examples/sweep.yaml --dryrun     # inspect the generated script
+#   slurmdunk generate path/to/examples/sweep.yaml --submit     # submit it
+#   slurmdunk collect path/to/examples/sweep.yaml --format both # gather results once it has run
 #
-# Before submitting, set 'partition', 'account' and 'result_database_path' for your cluster.
-# result_database_path must be absolute: the generated script changes into the
-# executable's directory, so a relative path would point somewhere else.
+# Before submitting, set 'partition' and 'account' for your cluster.
 
 execution:
   interpreter: python3
-  executable: examples/print_args.py
+  executable: print_args.py          # relative paths are taken from this file's folder
 
 slurm:
   job-name: slurmdunk_example
@@ -23,11 +21,11 @@ slurm:
   cpus-per-task: 1
 
 experiment:
-  result_database_path: /scratch/myproject/slurmdunk_examples   # <- absolute and writable
+  result_database_path: results      # <- for real runs, somewhere roomy, e.g. under /scratch
   experiment_name: sweep
   slrm_output_dir: SLURM_OUTPUT
   tracking_args:
-    save_dir: "{save_dir}_{__indicator}"
+    save_dir: "{save_dir}_{run}"
 
 args:
   mode: demo
@@ -39,7 +37,7 @@ outer_loops:                       # one array element per value
 
 inner_loop:                        # one run per row, inside each array element
   type: tabular_file
-  file_path: examples/points.txt
+  file_path: points.txt
   arg_names: [x, Q2]
 
 collect:

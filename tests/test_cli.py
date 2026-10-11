@@ -34,3 +34,20 @@ def test_python_dash_m(tmp_path):
     out = subprocess.run([sys.executable, "-m", "slurmdunk", "collect", "--help"], cwd=tmp_path,
                          capture_output=True, text=True)
     assert out.returncode == 0 and "--format" in out.stdout
+
+
+def test_run_and_indicator_placeholders_give_the_same_script(tmp_path, stub):
+    import re
+    scripts = []
+    for name, template in (("new", "{save_dir}_{run}"), ("old", "{save_dir}_{__indicator}")):
+        cfg = {"execution": {"executable": str(stub)}, "slurm": SLURM,
+               "experiment": {"result_database_path": str(tmp_path / "db"), "experiment_name": "e",
+                              "slrm_output_dir": "o", "tracking_args": {"save_dir": template}},
+               "inner_loop": {"type": "explicit", "arg_name": "x", "values": [1, 2]}}
+        config = write_config(tmp_path / f"{name}.yaml", cfg)
+        (tmp_path / name).mkdir()
+        out = slurmdunk(config, "--dryrun", "--notimecheck", cwd=tmp_path / name)
+        assert out.returncode == 0, out.stderr
+        script = next((tmp_path / name).glob("submit_*.sh")).read_text()
+        scripts.append(re.sub(r"(?m)^(# Generation timestamp:.*|echo \"\[GENERATION\].*|#SBATCH --comment=.*)$", "", script))
+    assert scripts[0] == scripts[1]

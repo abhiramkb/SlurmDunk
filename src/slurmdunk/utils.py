@@ -1,3 +1,4 @@
+import shlex
 from typing import Any, Collection, Dict, Tuple
 
 def format_cli_arg(arg: str) -> str:
@@ -15,7 +16,14 @@ def format_cli_arg(arg: str) -> str:
     return f"-{arg}" if len(arg) == 1 else f"--{arg}"
 
 def format_cli_args(args_dict: Dict[str, Any]) -> str:
-    """Formats key-value argument pairs into standard CLI flag strings."""
+    """Formats key-value argument pairs into standard CLI flag strings.
+
+    Values are shell-quoted, so the result is exactly the words bash later sees
+    (and the string checkpoint hashes are taken over): a value with spaces,
+    quotes or $ reaches the program intact and literal. Safe values (letters,
+    digits, @%+=:,./-_) are left unchanged, so their strings and hashes are the
+    same as before quoting was introduced.
+    """
     args_list = []
     for k, v in args_dict.items():
         flag = format_cli_arg(k)
@@ -27,7 +35,7 @@ def format_cli_args(args_dict: Dict[str, Any]) -> str:
         elif v is None:
             continue
         else:
-            args_list.append(f'{flag} {v}')
+            args_list.append(f'{flag} {shlex.quote(str(v))}')
 
     return " ".join(args_list)
 
@@ -92,5 +100,6 @@ def tracking_template_to_bash(template: str) -> str:
         .replace("{experiment_name}", "${EXPERIMENT_NAME}")
         .replace("{slrm_output_dir}", "${SLRM_OUTPUT_DIR}")
         .replace("{save_dir}", "${SAVE_DIR}")
-        .replace("{__indicator}", "${indicator}")
+        .replace("{run}", "${indicator}")
+        .replace("{__indicator}", "${indicator}")  # deprecated spelling of {run}
     )
