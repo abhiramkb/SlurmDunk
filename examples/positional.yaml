@@ -1,0 +1,39 @@
+# The sweep from sweep.yaml, but 'scale' and 'x' are passed by position instead of as
+# flags (see "Positional arguments" in README.md). Each run calls, for example:
+#   python3 print_args.py --mode demo --Q2 10 --save_dir <...> 0.5 0.01
+#
+# Run from the SlurmDunk directory; set partition, account and result_database_path first.
+
+execution:
+  interpreter: python3
+  executable: examples/print_args.py
+
+slurm:
+  job-name: slurmdunk_positional
+  partition: small                 # <- your partition
+  account: myproject               # <- your project
+  time: "00:05:00"
+  ntasks: 1
+  cpus-per-task: 1
+
+experiment:
+  result_database_path: /scratch/myproject/slurmdunk_examples   # <- absolute and writable
+  experiment_name: positional
+  slrm_output_dir: SLURM_OUTPUT
+  tracking_args:
+    save_dir: "{save_dir}_{__indicator}"
+
+args:
+  mode: demo
+
+outer_loops:
+  - type: explicit
+    arg_name: scale
+    values: [0.5, 2.0]
+
+inner_loop:
+  type: tabular_file
+  file_path: examples/points.txt
+  arg_names: [x, Q2]
+
+positional_args: [scale, x]        # passed in this order, after the flags

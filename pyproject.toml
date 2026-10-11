@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slurmdunk"
+dynamic = ["version"]
+description = "Config-driven parameter sweeps on SLURM: job arrays, packed inner loops, checkpoints and result collection."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+dependencies = [
+    "pydantic>=2",
+    "PyYAML>=5.4",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+slurmdunk = "slurmdunk.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "slurmdunk.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
