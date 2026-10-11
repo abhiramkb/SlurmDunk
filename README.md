@@ -65,9 +65,6 @@ slurmdunk generate my_config.json --dryrun
 # Collect one row per run into results.sqlite (and/or results.csv)
 slurmdunk collect my_config.json
 slurmdunk collect my_config.json --job-id 12345678 --format both
-
-# Combine tabular datasets (process_datasets: true configs - see below)
-slurmdunk process my_dataset_config.json
 ```
 
 `generate` is also the default when no subcommand is given at all, so `slurmdunk my_config.json` works too.
@@ -82,7 +79,6 @@ slurmdunk process my_dataset_config.json
 | `collect` | `--job-id <id>` | Collect one job (or one array task, `<arrayjobid>_<task>`) into `results_<id>.*` instead of `results.*`. |
 | `collect` | `--format sqlite\|csv\|both` | Output format(s); overrides `collect.formats` in the config. Default `sqlite`. |
 | `collect` | `--output-dir <dir>` | Write the results here instead of the experiment directory (e.g. outside a purged `/scratch`). |
-| `process` | *(none)* | Always writes the combined table; see [Dataset Processing Mode](#dataset-processing-mode). |
 
 Run `slurmdunk <subcommand> --help` for a subcommand's own flags.
 
@@ -102,7 +98,7 @@ In job array mode the outer combinations form the SLURM array (one task per Cart
 
 ## Configuration Schema
 
-**Paths.** A relative path anywhere in a config (`executable`, loop `file_path`s, `result_database_path`, `output_file_path`, a relative `collect.json.path`) is taken from the config file's own folder. So a config behaves the same wherever `slurmdunk` is run from.
+**Paths.** A relative path anywhere in a config (`executable`, loop `file_path`s, `result_database_path`, a relative `collect.json.path`) is taken from the config file's own folder. So a config behaves the same wherever `slurmdunk` is run from.
 
 **Argument values are passed literally.** Values with spaces, quotes, `$` or backticks reach the program exactly as written in the config, and `$VAR` inside an argument value is not expanded. Use `execution.env_vars` or `preamble` for anything that should come from the environment at run time.
 
@@ -529,46 +525,6 @@ Deleting a marker forces the corresponding run to repeat; deleting the `checkpoi
 
 ---
 
-## Dataset Processing Mode
-
-`process_datasets: true` marks a config for the `process` subcommand rather than `generate`: it reads one or more tabular data files, extracts and renames chosen columns, concatenates them row-wise into one table, optionally filters rows, and writes the result — no `execution`, `slurm`, `inner_loop`, checkpointing or submission involved. Run it with `slurmdunk process my_config.json`; there is no `--dryrun` for this subcommand, since writing the combined table is the entire point of running it. Passing such a config to `generate` (or the bare, subcommand-less invocation, which defaults to `generate`) is a clear error telling you to use `process` instead.
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `process_datasets` | Boolean | Enables this mode. `execution`/`slurm`/`experiment` are not required, and a warning is printed if any are supplied anyway, since they're ignored. |
-| `output_file_path` | Path | **Required.** Where the combined table is written, as CSV. |
-| `outer_loops` | Array | **Required, at least one entry.** Every entry must be `type: tabular_file` (the same schema used in sweep mode — `file_path`, `args`, `delimiter`, `comment_prefix`, `skip_blank_lines`). Each entry contributes its extracted rows to the combined table. All entries must select the same number of columns, since their rows stack into one table. |
-| `process.column_names` | Array | Renames the extracted columns positionally, e.g. the 1st column selected by every source becomes this list's 1st name. Its length must match the column count. Omit to keep each source's own `arg_name`s — only sensible when every source already uses the same names. |
-| `process.cuts` | String or Array | One or more boolean expressions; a row is kept only if every cut is true. Evaluated with each of the row's (renamed) columns bound by name, plus the same math functions available to `transform` (`sqrt`, `log10`, SciPy special functions, …). Numeric-looking values are compared numerically; anything else compares as a string. |
-
-```yaml
-process_datasets: true
-output_file_path: combined_posteriors.csv
-
-process:
-  column_names: [Qs0sq, Csq]
-  cuts:
-    - "Qs0sq < 0.1"
-
-outer_loops:
-  - type: tabular_file
-    file_path: /projappl/lappi/abhiram/bayesian_alldata/LO_MVe/posteriorsamples.dat
-    delimiter: " "
-    args:
-      - {arg_name: Q, column: 0}
-      - {arg_name: C2, column: 2}
-  - type: tabular_file
-    file_path: /projappl/lappi/abhiram/bayesian_alldata/KCBK_pd_MVgamma/posteriorsamples.dat
-    delimiter: ","
-    args:
-      - {arg_name: Q, column: 1}
-      - {arg_name: C2, column: 3, transform: "10**x"}   # this file stores log10(C^2)
-```
-
-Each source can use its own `arg_name`s, column order, delimiter and even a `transform` to normalize units before the tables are stacked — only the final column *count* and the shared `column_names` need to agree.
-
----
-
 ## Result Collection
 
 `slurmdunk collect my_config.json` reads the SLURM logs under `<result_database_path>/<experiment_name>/<slrm_output_dir>` and writes **one row per run** to `results.sqlite` (table `runs`) and/or `results.csv` in the experiment directory. It works for any executable, because the generated scripts label every line of a run's output with that run (see [Log Output & Stream Tagging](#log-output--stream-tagging)).
@@ -695,7 +651,12 @@ cd /path/to/SlurmDunk && python3 -m pytest
 
 Earlier versions allowed an outer loop block to select a different inner-loop data file per value via an `inner_files` mapping. Inner loops are now evaluated once and shared across all outer combinations, so `inner_files` is rejected with an explicit error rather than silently ignored. Use a separate config per inner file if they need to differ.
 
-SlurmDunk grew out of an earlier framework, Code-Orchestrator. That framework's NLO Diffraction specific `collectold` collector is not part of SlurmDunk; `collect` gathers the same data generically (see [Result Collection](#result-collection)). Checkpoint names are unchanged, and the duplicate-submission check still recognises Code-Orchestrator's job tags, so campaigns started with Code-Orchestrator resume under SlurmDunk.
+SlurmDunk grew out of an earlier framework, Code-Orchestrator. Two of its features were left out; Code-Orchestrator keeps both:
+
+- **`collectold`:** the NLO Diffraction specific collector. `collect` gathers the same data generically (see [Result Collection](#result-collection)).
+- **Dataset processing:** `process_datasets: true` and the `process` subcommand. A config that still sets `process_datasets` is rejected with an error saying so.
+
+Checkpoint names are unchanged, and the duplicate-submission check still recognises Code-Orchestrator's job tags, so campaigns started with Code-Orchestrator resume under SlurmDunk.
 
 ---
 

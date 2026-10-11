@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from slurmdunk import core
+from slurmdunk import checks
 from slurmdunk.config_schema import validate_config
 
 from conftest import SLURM, dedent, generate, write_config
@@ -39,10 +39,10 @@ def test_duplicate_check_matches_new_and_legacy_tags(squeue, tmp_path, monkeypat
         3000005|PENDING|slurmdunk-config:{path}.bak
         """))
     monkeypatch.setenv("STUB_OUT", str(out))
-    jobs, error = core.find_live_jobs_for_config(cfg)
+    jobs, error = checks.find_live_jobs_for_config(cfg)
     assert error is None
     assert jobs == {"3000001": {"PENDING", "RUNNING"}, "3000002": {"RUNNING"}}
-    assert core.check_duplicate_submission(cfg) is True  # skip this config
+    assert checks.check_duplicate_submission(cfg) is True  # skip this config
 
 
 def test_duplicate_check_failing_or_missing_squeue(squeue, tmp_path, monkeypatch):
@@ -50,11 +50,11 @@ def test_duplicate_check_failing_or_missing_squeue(squeue, tmp_path, monkeypatch
     cfg.write_text("")
     monkeypatch.setenv("STUB_RC", "1")
     monkeypatch.setenv("STUB_ERR", "slurm_load_jobs error: Socket timed out")
-    assert core.find_live_jobs_for_config(cfg)[1] == "slurm_load_jobs error: Socket timed out"
-    assert core.check_duplicate_submission(cfg) is True  # cannot verify: skip
+    assert checks.find_live_jobs_for_config(cfg)[1] == "slurm_load_jobs error: Socket timed out"
+    assert checks.check_duplicate_submission(cfg) is True  # cannot verify: skip
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    assert core.find_live_jobs_for_config(cfg) == (None, None)
-    assert core.check_duplicate_submission(cfg) is False  # off the cluster: warn and continue
+    assert checks.find_live_jobs_for_config(cfg) == (None, None)
+    assert checks.check_duplicate_submission(cfg) is False  # off the cluster: warn and continue
 
 
 def test_generated_script_carries_the_new_tag(tmp_path, stub):
@@ -87,7 +87,7 @@ p.parse_args()
 
 def help_check(tmp_path, execution, args, positional=()):
     cfg = {"execution": execution, "slurm": SLURM, "args": args, "positional_args": list(positional)}
-    return core.validate_script_args(validate_config(cfg, "test", True))
+    return checks.validate_script_args(validate_config(cfg, "test", True))
 
 
 @pytest.fixture
@@ -141,4 +141,4 @@ def test_help_check_without_interpreter(programs):
     ("no usage line here\n", None),
 ])
 def test_count_usage_positionals(usage, count):
-    assert core.count_usage_positionals(usage) == count
+    assert checks.count_usage_positionals(usage) == count

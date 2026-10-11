@@ -73,3 +73,8 @@ def test_current_spellings_do_not_warn(capsys, tmp_path):
                                     "tracking_args": {"save_dir": "{save_dir}_{run}"}}},
                     str(tmp_path / "new.yaml"), True)
     assert "deprecated" not in capsys.readouterr().err
+
+
+def test_process_datasets_is_rejected(capsys):
+    message = error_of({"process_datasets": True}, capsys)
+    assert "not part of SlurmDunk" in message and "Code-Orchestrator" in message

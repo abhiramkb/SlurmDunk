@@ -1,14 +1,13 @@
 import re
 import sys
-import warnings
 from pathlib import Path
-from typing import Annotated, Any, Dict, List, Tuple, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Set, Tuple, Union
 from pydantic import AliasChoices, BaseModel, Field, ValidationError, ValidationInfo, computed_field, field_validator, model_validator
 
 # Pattern compilation is shared with the collector, so template errors surface when
 # the config is loaded rather than mid-collection
 from .collect import DEFAULT_JSON_PATH, RUN_INFO_COLUMNS, pattern_matcher
-from .utils import check_positional_value
+from .utils import check_positional_value, format_cli_arg
 
 def resolve_config_path(path: Union[str, Path], info: ValidationInfo) -> Path:
     """Makes a relative path absolute, taken from the config file's folder.
@@ -51,26 +50,6 @@ def determine_loop_q(cfg: dict) -> bool:
         mode_index = 2
 
     return True, mode_index
-
-
-# --- 0. Dataset Processing Model ---
-
-class ProcessConfig(BaseModel):
-    """Renaming and row-filtering rules applied to a combined dataset.
-
-    Global only: every 'outer_loops' source is concatenated row-wise into one table,
-    so one naming/filtering scheme applies uniformly to the result, not per source.
-    """
-    column_names: Optional[List[str]] = None  # Renames the extracted columns positionally
-    cuts: List[str] = Field(default_factory=list)  # E.g. ["Q < 10", "status == 'VALID'"]
-
-    @field_validator("cuts", mode="before")
-    @classmethod
-    def normalize_cuts(cls, v: Any) -> List[str]:
-        """Accepts either a single string or a list of strings for cuts."""
-        if isinstance(v, str):
-            return [v]
-        return v or []
 
 
 # --- 1. Outer Loop Polymorphic Models ---
@@ -434,9 +413,8 @@ class CollectConfig(BaseModel):
 # --- 3. Root Application Schema ---
 
 class AppConfig(BaseModel):
-    loopQ: Optional[bool] = None  # Optional explicit flag from config JSON
-    # Required for the SLURM sweep modes; absent (and ignored if given) for
-    # process_datasets mode, which submits no job.
+    loopQ: Optional[bool] = None  # Deprecated: the mode follows from which loop sections are present
+    # Required; Optional only so a missing block gets the clear message in validate_required_sections
     execution: Optional[ExecutionConfig] = None
     slurm: Optional[SlurmConfig] = None
     inner_loop: Optional[InnerLoop] = None
@@ -448,17 +426,6 @@ class AppConfig(BaseModel):
     # instead of as flags, in command-line order
     positional_args: List[str] = Field(default_factory=list)
     positional_placement: Literal["last", "first"] = "last"  # after the flags, or before them
-
-    # --- Dataset processing mode: combines 'outer_loops' tabular sources row-wise
-    # into one table instead of generating a SLURM sweep. See validate_dataset_processing_rules.
-    process_datasets: bool = False
-    output_file_path: Optional[Path] = None  # Where the combined table is written
-
-    @field_validator("output_file_path")
-    @classmethod
-    def resolve_output_file_path(cls, v: Optional[Path], info: ValidationInfo) -> Optional[Path]:
-        return None if v is None else resolve_config_path(v, info)
-    process: Optional[ProcessConfig] = None  # Renaming/cuts applied to the combined table
 
     @model_validator(mode="before")
     @classmethod
@@ -482,6 +449,11 @@ class AppConfig(BaseModel):
         parameter set instead of failing.
         """
         if isinstance(data, dict):
+            if data.get("process_datasets"):
+                raise ValueError(
+                    "'process_datasets' (combining tabular datasets) is not part of SlurmDunk; "
+                    "it remains available in Code-Orchestrator."
+                )
             for idx, block in enumerate(data.get("outer_loops") or []):
                 if isinstance(block, dict) and "inner_files" in block:
                     raise ValueError(
@@ -545,10 +517,28 @@ class AppConfig(BaseModel):
                 add(key, "tracking")
         return sources
 
+    def argument_names(self) -> Set[str]:
+        """All argument keys across all configuration sections, as written in the config;
+        passed_flags turns them into the flag spellings the executable actually receives."""
+        return set(self.argument_sources())
+
+    def passed_flags(self) -> List[str]:
+        """Every flag spelling the generated script passes to the executable.
+
+        Mirrors how the script builds its command lines: format_cli_args for args and
+        loop arguments ('x' -> '-x', 'beta' -> '--beta'), and always '--<key>' for
+        tracking args (build_experiment_strings). Positional arguments have no flag.
+        """
+        positional = set(self.positional_args)
+        flags = {format_cli_arg(name) for name in self.argument_names() if name not in positional}
+        if self.experiment and self.experiment.tracking_args:
+            flags.update(f"--{key}" for key in self.experiment.tracking_args if key not in positional)
+        return sorted(flags)
+
     @model_validator(mode="after")
     def validate_positional_args(self) -> "AppConfig":
         """Each positional name must have exactly one definition and a value that can stand alone."""
-        if self.process_datasets or not self.positional_args:
+        if not self.positional_args:
             return self
         sources = self.argument_sources()
         seen = set()
@@ -588,66 +578,16 @@ class AppConfig(BaseModel):
         return self.mode_info[0]
 
     @model_validator(mode="after")
-    def validate_dataset_processing_rules(self) -> "AppConfig":
-        """Validates the dataset-processing mode, and requires execution/slurm otherwise."""
-        if self.process_datasets:
-            ignored = [
-                name for name, val in (("execution", self.execution), ("slurm", self.slurm),
-                                        ("experiment", self.experiment))
-                if val is not None
-            ]
-            if ignored:
-                warnings.warn(
-                    f"'process_datasets' is True; the following section(s) are ignored: "
-                    f"{', '.join(ignored)}.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-
-            if not self.outer_loops:
-                raise ValueError("'process_datasets' mode requires at least one entry in 'outer_loops'.")
-
-            tabular_blocks: List[TabularOuterLoop] = []
-            for idx, block in enumerate(self.outer_loops):
-                if not isinstance(block, TabularOuterLoop):
-                    raise ValueError(
-                        f"outer_loops[{idx}] must be of type 'tabular_file' when 'process_datasets' is True."
-                    )
-                tabular_blocks.append(block)
-
-            # Every source must extract the same number of columns: they concatenate
-            # row-wise into one table, so their columns must line up positionally.
-            first_num_args = len(tabular_blocks[0].args)
-            for idx, block in enumerate(tabular_blocks[1:], start=1):
-                if len(block.args) != first_num_args:
-                    raise ValueError(
-                        f"Column count mismatch in 'process_datasets' mode: outer_loops[0] selects "
-                        f"{first_num_args} columns, but outer_loops[{idx}] selects {len(block.args)}. "
-                        "All sources must select the same number of columns to be combined."
-                    )
-
-            if not self.output_file_path:
-                raise ValueError("'process_datasets' mode requires 'output_file_path'.")
-
-            if self.process and self.process.column_names:
-                if len(self.process.column_names) != first_num_args:
-                    raise ValueError(
-                        f"Number of 'process.column_names' ({len(self.process.column_names)}) does not "
-                        f"match the number of extracted columns ({first_num_args})."
-                    )
-        else:
-            if self.execution is None:
-                raise ValueError("Missing 'execution' configuration block.")
-            if self.slurm is None:
-                raise ValueError("Missing 'slurm' configuration block.")
-
+    def validate_required_sections(self) -> "AppConfig":
+        if self.execution is None:
+            raise ValueError("Missing 'execution' configuration block.")
+        if self.slurm is None:
+            raise ValueError("Missing 'slurm' configuration block.")
         return self
 
     @model_validator(mode="after")
     def validate_multithreading_level(self) -> "AppConfig":
-        """Checks that one run actually fits inside the requested allocation (sweep modes only)."""
-        if self.process_datasets:
-            return self
+        """Checks that one run actually fits inside the requested allocation."""
         level = self.execution.multithreading_level
         if level is None:
             return self
@@ -662,10 +602,7 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_mode_integrity(self) -> "AppConfig":
-        """Enforces rules based on determined mode_index (sweep modes only)."""
-        if self.process_datasets:
-            return self
-
+        """Enforces rules based on determined mode_index."""
         is_loop, mode = self.mode_info
 
         if is_loop:

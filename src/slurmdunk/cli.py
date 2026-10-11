@@ -1,18 +1,17 @@
-"""The 'slurmdunk' command: generate/submit SLURM scripts, collect results, process datasets."""
+"""The 'slurmdunk' command: generate/submit SLURM scripts and collect their results."""
 import argparse
 import sys
 from typing import List, Optional
 
 from . import __version__
 from .collect import FORMAT_CHOICES, collect_results
+from .checks import check_duplicate_submission
 from .config_schema import AppConfig, validate_config
-from .core import (
-    check_duplicate_submission, extract_config_arg_names, generate_slurm_script,
-    get_dict_from_config_file, process_datasets, submit_slurm_script,
-)
+from .generate import generate_slurm_script, get_dict_from_config_file
+from .submit import submit_slurm_script
 from .utils import strip_hyphens
 
-COMMANDS = ("generate", "collect", "process")
+COMMANDS = ("generate", "collect")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -31,8 +30,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="slurmdunk",
-        description="Generate and submit SLURM scripts, collect their results, or "
-                     "combine tabular datasets, from JSON/YAML config files."
+        description="Generate and submit SLURM scripts from JSON/YAML config files, "
+                     "and collect their results."
     )
     parser.add_argument("--version", action="version", version=f"slurmdunk {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -80,11 +79,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Write the results here instead of the experiment directory."
     )
 
-    subparsers.add_parser(
-        "process", parents=[common],
-        help="Combine the 'outer_loops' tabular sources into one row-wise concatenated CSV."
-    )
-
     return parser
 
 
@@ -105,16 +99,11 @@ def main(argv: Optional[List[str]] = None) -> None:
             config: AppConfig = validate_config(get_dict_from_config_file(config_path), config_path, True)
             collect_results(
                 config,
-                {strip_hyphens(str(name)) for name in extract_config_arg_names(config)},
+                {strip_hyphens(str(name)) for name in config.argument_names()},
                 job_id=args.job_id,
                 formats=FORMAT_CHOICES[args.format] if args.format else None,
                 output_dir=args.output_dir,
             )
-
-    elif args.command == "process":
-        for config_path in args.config_paths:
-            print(f"\n--- Processing: {config_path} ---")
-            process_datasets(config_path)
 
     else:  # generate
         checkargsQ = not args.noargcheck

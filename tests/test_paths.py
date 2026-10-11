@@ -63,8 +63,7 @@ def test_other_paths_resolve_against_the_config(tmp_path):
     assert validate_config({**base, "collect": {"json": "{json}"}}, config, True).collect.json_file.path == "{json}"
     assert validate_config({**base, "experiment": {"result_database_path": "/abs/db", "experiment_name": "e",
                                                    "slrm_output_dir": "o"}}, config, True).experiment.result_database_path == "/abs/db"
-    p = validate_config({"process_datasets": True, "output_file_path": "combined.csv",
-                         "outer_loops": [{"type": "tabular_file", "file_path": "t.txt",
-                                          "args": [{"arg_name": "a", "column": 0}]}]}, config, True)
-    assert p.output_file_path == folder / "combined.csv"
+    p = validate_config({**base, "outer_loops": [{"type": "tabular_file", "file_path": "t.txt",
+                                                  "args": [{"arg_name": "a", "column": 0}]}],
+                         "inner_loop": {"type": "explicit", "arg_name": "b", "values": [1]}}, config, True)
     assert p.outer_loops[0].file_path == folder / "t.txt"

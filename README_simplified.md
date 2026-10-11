@@ -48,7 +48,6 @@ slurmdunk collect "$CFG"             # gather finished results into results.sqli
 | `collect` | `--format both` | You also (or only, with `csv`) want `results.csv`. |
 | `collect` | `--job-id 12345678` | Same, one job only → `results_12345678.*`. |
 | `collect` | `--output-dir DIR` | You want the results somewhere other than the experiment directory. |
-| `process` | *(none)* | Combining tabular datasets instead of running a sweep — see the full README. |
 
 `collect` always records each run's arguments, status, exit code and run time. To also pull a value
 out of what your code prints, write the line as it appears with `{name}` where the value is:

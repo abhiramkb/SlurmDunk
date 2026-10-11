@@ -2,6 +2,8 @@
 import subprocess
 import sys
 
+import pytest
+
 from slurmdunk import __version__
 
 from conftest import SLURM, slurmdunk, write_config
@@ -10,7 +12,7 @@ from conftest import SLURM, slurmdunk, write_config
 def test_help_lists_subcommands(tmp_path):
     out = slurmdunk("--help", cwd=tmp_path)
     assert out.returncode == 0
-    assert "{generate,collect,process}" in out.stdout and "usage: slurmdunk" in out.stdout
+    assert "{generate,collect}" in out.stdout and "usage: slurmdunk" in out.stdout
 
 
 def test_version(tmp_path):
@@ -24,10 +26,11 @@ def test_bare_config_path_means_generate(tmp_path, stub):
     assert list(tmp_path.glob("submit_single_*.sh"))
 
 
-def test_collectold_is_gone(tmp_path):
-    # Not a subcommand any more, so it is read as a config path for 'generate'
-    out = slurmdunk("collectold", "x.yaml", cwd=tmp_path)
-    assert out.returncode == 1 and "Configuration file 'collectold' not found" in out.stderr
+@pytest.mark.parametrize("removed", ["collectold", "process"])
+def test_removed_subcommands_are_gone(tmp_path, removed):
+    # Not subcommands any more, so each is read as a config path for 'generate'
+    out = slurmdunk(removed, "x.yaml", cwd=tmp_path)
+    assert out.returncode == 1 and f"Configuration file '{removed}' not found" in out.stderr
 
 
 def test_python_dash_m(tmp_path):

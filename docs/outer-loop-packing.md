@@ -46,7 +46,7 @@ outer_args_str="${OUTER_ARGS[$TASK_ID]}"
 indicator="A${TASK_ID}_L${line_no}"          # ← keyed on the ARRAY ELEMENT
 ```
 
-That indicator is what names the per-run output directory, via the tracking args (`core.py`, `SAVE_DIR`):
+That indicator is what names the per-run output directory, via the tracking args (`generate.py`, `SAVE_DIR`):
 
 ```
 ${SAVE_DIR}_${indicator}      e.g.  /scratch/.../1076474_A0_L5
@@ -212,9 +212,9 @@ Deliberately **not** implemented: a `time_per_outer` knob that computes `--time`
 
 ## 6. The partition time-limit check
 
-Modelled on the existing executable `--help` check (`validate_script_args`, `core.py:539`): a violation is a hard error, not a warning, since `sbatch` would reject it anyway — only later, after you have waited.
+Modelled on the existing executable `--help` check (`validate_script_args`, `checks.py`): a violation is a hard error, not a warning, since `sbatch` would reject it anyway — only later, after you have waited.
 
-`validate_partition_time_limit` (`core.py:331`) queries `scontrol show partition <name>` and compares `MaxTime` to the requested `time`:
+`validate_partition_time_limit` (`checks.py`) queries `scontrol show partition <name>` and compares `MaxTime` to the requested `time`:
 
 | Situation | Behaviour |
 | :--- | :--- |

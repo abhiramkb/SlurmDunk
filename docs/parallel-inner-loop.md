@@ -39,7 +39,7 @@ This is the thing to keep straight while reading the source. Almost all the bash
   config.json                                        (you write this)
        │
        ▼
-  core.py  +  mode_builders.py                       PYTHON, runs once, on the login node
+  generate.py + mode_builders.py                     PYTHON, runs once, on the login node
        │                                             - expands loops
        │                                             - drops already-completed work
        │                                             - pastes bash templates together
@@ -363,7 +363,7 @@ The directory uses `$SLURM_JOB_ID`, **not** the exported `$JOB_ID`. In array mod
 }
 ```
 
-**Set your thread variable yourself.** The generator exports `MULTITHREADING_LEVEL` (`core.py:203`) but never rewrites `env_vars`. Leaving `JULIA_NUM_THREADS` at `$SLURM_CPUS_PER_TASK` while running N ways concurrently asks for N × the cores and is slower than sequential; `warn_about_concurrency` (`core.py:266`) prints a warning but does not block.
+**Set your thread variable yourself.** The generator exports `MULTITHREADING_LEVEL` (`generate.py`, `build_common_header`) but never rewrites `env_vars`. Leaving `JULIA_NUM_THREADS` at `$SLURM_CPUS_PER_TASK` while running N ways concurrently asks for N × the cores and is slower than sequential; `warn_about_concurrency` (`core.py:266`) prints a warning but does not block.
 
 Guards in `config_schema.py`:
 

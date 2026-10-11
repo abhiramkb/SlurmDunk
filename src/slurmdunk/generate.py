@@ -1,36 +1,26 @@
-import csv
+"""Script generation: from a validated config to a self-contained SLURM submission script."""
 import json
-import yaml
-from datetime import datetime
-import shutil
-import sys
-from pathlib import Path
-import subprocess
-import re
 import shlex
-from typing import Any, Collection, Dict, Optional, List, Set, Tuple
+import shutil
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Collection, List, Optional, Tuple
 
-# Required for Pydantic based validation of input config file
-from .config_schema import (
-    validate_config, AppConfig, ExperimentConfig, SlurmConfig, ExecutionConfig,
-    TabularInnerLoop, TabularOuterLoop, get_slurm_cpus_per_task, parse_slurm_mem_mb,
-    parse_slurm_time_seconds,
-)
+import yaml
 
-# Required for constructing mode-specific portion of SLURM scripts
-from .mode_builders import (
-    build_single_mode, build_inner_loop_mode, build_job_array_mode, build_exec_command, _evaluate_tabular_rows,
-)
-
-# Required for evaluating process_datasets 'cuts' expressions
-from .arg_transform import _evaluate_cut
-
-# Utilities
 from . import __version__
-from .utils import (
-    PositionalValueError, bash_dq_escape, format_cli_arg, format_cli_args, split_positional,
-    tracking_template_to_bash,
+from .checks import get_config_tag, validate_partition_time_limit
+from .config_schema import (
+    AppConfig, ExecutionConfig, ExperimentConfig, SlurmConfig, get_slurm_cpus_per_task, parse_slurm_mem_mb,
+    validate_config,
 )
+from .mode_builders import build_inner_loop_mode, build_job_array_mode, build_single_mode
+from .utils import (
+    PositionalValueError, bash_dq_escape, format_cli_args, split_positional, tracking_template_to_bash,
+)
+
 
 def get_dict_from_config_file(config_path) -> dict:
   config_file = Path(config_path)
@@ -129,6 +119,7 @@ mkdir -p "$CHECKPOINT_DIR"
     fi"""
     return exp_name, exp_env_block, exp_args_block
 
+
 def setup_experiment_directories(
     experiment: Optional[ExperimentConfig],
     slurm: SlurmConfig,
@@ -167,6 +158,8 @@ def setup_experiment_directories(
     if dryrun_q:
         return None
     return Path(db_path) / exp_name / timestamp
+
+
   
 def _get_generator_git_commit() -> str:
     """Retrieves the git commit of the SlurmDunk checkout, or the package version when
@@ -184,6 +177,7 @@ def _get_generator_git_commit() -> str:
         return result.stdout.strip()
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         return f"none (slurmdunk {__version__}, not a git checkout)"
+
 
 def build_common_header(
     slurm: SlurmConfig,
@@ -366,157 +360,6 @@ def warn_about_concurrency(config: AppConfig) -> None:
         print(f"[INFO] Inner loop will run up to {njobs} concurrent run(s){detail}.")
 
 
-def get_partition_max_time(partition: str) -> Tuple[Optional[int], Optional[str]]:
-    """Looks up a partition's MaxTime via scontrol.
-
-    Returns (max_seconds, error). max_seconds is None when the limit is unknown
-    or UNLIMITED. error is set only when the partition genuinely does not exist;
-    when scontrol itself is unavailable both are None so the caller skips the
-    check (e.g. a --dryrun off the cluster).
-    """
-    try:
-        result = subprocess.run(
-            ["scontrol", "show", "partition", partition],
-            capture_output=True, text=True, timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None, None  # no scontrol here: nothing to check against
-
-    if result.returncode != 0:
-        return None, f"partition '{partition}' does not exist on this cluster"
-
-    match = re.search(r"MaxTime=(\S+)", result.stdout)
-    if not match:
-        return None, None
-    return parse_slurm_time_seconds(match.group(1)), None
-
-
-def validate_partition_time_limit(config: AppConfig) -> None:
-    """Rejects a requested time limit the partition would refuse.
-
-    Mirrors the executable argument check: a violation is a hard error rather
-    than a warning, since sbatch would reject the submission anyway. Runs at
-    generation time because the default workflow generates a script and submits
-    it manually later, so a submit-time-only check would miss most usage.
-    """
-    partition = config.slurm.partition
-    requested = parse_slurm_time_seconds(config.slurm.time)
-
-    max_seconds, error = get_partition_max_time(partition)
-    if error is not None:
-        print(f"\n[ERROR] Partition validation failed: {error}.", file=sys.stderr)
-        print("[ERROR] Use --notimecheck to skip this check.", file=sys.stderr)
-        sys.exit(1)
-
-    if max_seconds is None or requested is None:
-        return
-
-    if requested > max_seconds:
-        print(
-            f"\n[ERROR] Requested time '{config.slurm.time}' exceeds the limit of "
-            f"partition '{partition}'.",
-            file=sys.stderr,
-        )
-        print(
-            f"[ERROR] Partition MaxTime is {format_seconds_as_slurm_time(max_seconds)}; "
-            f"requested {format_seconds_as_slurm_time(requested)}.",
-            file=sys.stderr,
-        )
-        print("[ERROR] Use --notimecheck to skip this check.", file=sys.stderr)
-        sys.exit(1)
-
-
-# Written into each generated script's SBATCH comment, so a queued job can be
-# traced back to the config file it was generated from.
-CONFIG_TAG_PREFIX = "slurmdunk-config:"
-# Written by the framework before it became SlurmDunk; still matched, so jobs
-# submitted with the old tool are caught by the duplicate-submission check.
-LEGACY_CONFIG_TAG_PREFIXES = ("orchestrator-config:",)
-
-
-def get_config_tag(config_path) -> str:
-    """Identifies a config in SLURM's comment field by its resolved absolute path."""
-    return f"{CONFIG_TAG_PREFIX}{Path(config_path).resolve()}"
-
-
-def find_live_jobs_for_config(config_path) -> Tuple[Optional[Dict[str, Set[str]]], Optional[str]]:
-    """Looks up the user's queued/running jobs that were generated from this config.
-
-    Returns (jobs, error). jobs maps base job ID -> set of states, so an array
-    job appears once however many of its tasks are listed. Both are None when
-    squeue is unavailable (e.g. off the cluster); error is set when squeue exists
-    but the queue could not be read.
-    """
-    resolved = Path(config_path).resolve()
-    tags = {f"{prefix}{resolved}" for prefix in (CONFIG_TAG_PREFIX,) + LEGACY_CONFIG_TAG_PREFIXES}
-    try:
-        result = subprocess.run(
-            ["squeue", "--me", "--noheader", "--format=%F|%T|%k"],
-            capture_output=True, text=True, timeout=60,
-        )
-    except FileNotFoundError:
-        return None, None  # no squeue here: nothing to check against
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return None, str(e)
-
-    if result.returncode != 0:
-        return None, result.stderr.strip() or f"squeue exited with code {result.returncode}"
-
-    jobs: Dict[str, Set[str]] = {}
-    for line in result.stdout.splitlines():
-        # The comment is the last field, so a '|' inside it cannot shift the others
-        parts = line.strip().split("|", 2)
-        if len(parts) == 3 and parts[2] in tags:
-            jobs.setdefault(parts[0], set()).add(parts[1])
-    return jobs, None
-
-
-def check_duplicate_submission(config_path) -> bool:
-    """Returns True if the config must be skipped because jobs generated from it
-    are still in the queue.
-
-    Checkpointing only skips work that has finished; queued or running tasks
-    would be submitted a second time. Runs at generation time for the same
-    reason as the partition time check: the script is often submitted by hand.
-    A queue that cannot be read also skips the config, since the safeguard
-    should not wave a submission through unchecked.
-    """
-    jobs, error = find_live_jobs_for_config(config_path)
-    if error is not None:
-        print(f"[ERROR] Skipping {config_path}: could not query the SLURM queue: {error}", file=sys.stderr)
-        print("[ERROR] Retry, or pass --nodupcheck to skip the duplicate-submission check.", file=sys.stderr)
-        return True
-
-    if jobs is None:
-        print("[WARNING] 'squeue' not found; skipping the duplicate-submission check.", file=sys.stderr)
-        return False
-
-    if not jobs:
-        return False
-
-    print(
-        f"[ERROR] Skipping {config_path}: job(s) generated from this config are still in the queue:",
-        file=sys.stderr,
-    )
-    for job_id, states in sorted(jobs.items()):
-        print(f"[ERROR]   {job_id} ({', '.join(sorted(states))})", file=sys.stderr)
-    print(
-        "[ERROR] Wait for them to finish (checkpointing then skips completed work), scancel them, "
-        "or pass --nodupcheck.",
-        file=sys.stderr,
-    )
-    return True
-
-
-def format_seconds_as_slurm_time(total_seconds: int) -> str:
-    """Renders seconds as SLURM's D-HH:MM:SS, dropping the day part when zero."""
-    days, rem = divmod(total_seconds, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes, seconds = divmod(rem, 60)
-    stamp = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    return f"{days}-{stamp}" if days else stamp
-
-
 def check_generated_script(script_content: str) -> None:
     """Syntax-checks the generated bash and guards SLURM's script size limit."""
     size = len(script_content.encode("utf-8"))
@@ -578,22 +421,6 @@ def write_script(
     return script_file
 
 
-def discard_backup_dir(backup_dir: Optional[Path]) -> None:
-    """Removes a run's backup directory after a submission that produced no job.
-
-    Only ever called for a directory this run created (<db>/<exp>/<timestamp>),
-    so there is nothing here that could reach pre-existing results.
-    """
-    if backup_dir is None or not backup_dir.is_dir():
-        return
-    try:
-        shutil.rmtree(backup_dir)
-        print(f"[INFO] Removed backup directory for the failed submission: {backup_dir}")
-    except Exception as e:
-        print(f"[WARNING] Could not remove backup directory '{backup_dir}': {e}", file=sys.stderr)
-
-
-
 def generate_slurm_script(
     config_path, dryrunQ, checktimeQ: bool = True
 ) -> Tuple[Optional[Path], Optional[Path]]:
@@ -612,15 +439,6 @@ def generate_slurm_script(
     # 1. Validate & convert raw dict to typed AppConfig object
     config: AppConfig = validate_config(cfg, config_path, dryrunQ)
     print(f"[SUCCESS] Config validation passed for '{config_path}'.")
-
-    if config.process_datasets:
-        print(
-            f"[ERROR] '{config_path}' has 'process_datasets: true'. Use the 'process' "
-            "subcommand instead of 'generate' (or the bare invocation, which defaults "
-            "to 'generate').",
-            file=sys.stderr,
-        )
-        sys.exit(1)
 
     warn_about_concurrency(config)
     if checktimeQ:
@@ -643,7 +461,7 @@ def generate_slurm_script(
     )
     common_header = build_common_header(
         slurm_cfg, exec_cfg, exp_env_block, timestamp, backup_dir, get_config_tag(config_file),
-        get_passed_flags(config),
+        config.passed_flags(),
     )
 
     exec_path = Path(exec_cfg.executable).resolve()
@@ -722,228 +540,3 @@ def generate_slurm_script(
     except PositionalValueError as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         sys.exit(1)
-
-def extract_config_arg_names(config: AppConfig) -> Set[str]:
-    """Collects all argument keys across all configuration sections in AppConfig.
-
-    These are the names as written in the config; get_passed_flags turns them
-    into the flag spellings the executable actually receives.
-    """
-    return set(config.argument_sources())
-
-
-def get_passed_flags(config: AppConfig) -> List[str]:
-    """Every flag spelling the generated script passes to the executable.
-
-    Mirrors how the script builds its command lines: format_cli_args for args and
-    loop arguments ('x' -> '-x', 'beta' -> '--beta'), and always '--<key>' for
-    tracking args (build_experiment_strings). Positional arguments have no flag.
-    """
-    positional = set(config.positional_args)
-    flags = {format_cli_arg(name) for name in extract_config_arg_names(config) if name not in positional}
-    if config.experiment and config.experiment.tracking_args:
-        flags.update(f"--{key}" for key in config.experiment.tracking_args if key not in positional)
-    return sorted(flags)
-
-
-def count_usage_positionals(help_text: str) -> Optional[int]:
-    """Best-effort count of the positional arguments in a usage line.
-
-    Understands the 'usage: prog [-h] [--x X] infile outfile' form printed by
-    argparse and ArgParse.jl: bracketed (optional) groups are dropped, as is the
-    value following a required option; the remaining bare words are positionals.
-    Returns None when there is no usage line.
-    """
-    lines = help_text.splitlines()
-    start = next((i for i, line in enumerate(lines) if line.strip().lower().startswith("usage:")), None)
-    if start is None:
-        return None
-    usage = [lines[start].strip()[len("usage:"):]]
-    for line in lines[start + 1:]:
-        if not line.strip() or not line[:1].isspace():  # wrapped usage lines are indented
-            break
-        usage.append(line.strip())
-
-    text = " ".join(usage)
-    while True:  # innermost brackets first, so nested optional groups disappear too
-        stripped = re.sub(r"\[[^\[\]]*\]", " ", text)
-        if stripped == text:
-            break
-        text = stripped
-
-    count, after_option = 0, False
-    for token in text.split()[1:]:  # [0] is the program name
-        if after_option:
-            after_option = False
-        elif token.startswith("-"):
-            after_option = True
-        elif token != "...":
-            count += 1
-    return count
-
-
-def validate_script_args(config: AppConfig) -> Tuple[bool, List[str]]:
-    """Validates if arguments defined in the AppConfig instance are supported
-    by the target executable via --help.
-
-    Returns:
-        Tuple[bool, List[str]]: (is_valid, list_of_unsupported_flags)
-    """
-    exec_cfg = config.execution
-    executable_path = str(exec_cfg.executable)
-    modules = exec_cfg.modules
-
-    # The exact spellings the executable receives ('-x', '--beta'), shared with print_args
-    flags_to_check = get_passed_flags(config)
-    if not flags_to_check:
-        return True, []
-
-    # Build bash command to load modules and invoke help flag
-    module_cmds = [f"module load {m}" for m in modules]
-    # Built like the real run command, which leaves out a missing interpreter, so a
-    # directly executable program is called as '<executable> --help'
-    exec_cmd = build_exec_command(exec_cfg, "", "", "--help")
-    full_cmd = " && ".join(module_cmds + [exec_cmd])
-
-    try:
-        result = subprocess.run(
-            ["bash", "-c", full_cmd],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=30,
-        )
-        help_output = result.stdout
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        stderr_msg = e.stderr if hasattr(e, "stderr") else str(e)
-        raise RuntimeError(
-            f"Failed to execute '--help' check on '{executable_path}':\n{stderr_msg}"
-        ) from e
-
-    # Extract all supported option flags from --help text
-    raw_found_flags = set(re.findall(r"(?<!\w)(-[a-zA-Z0-9_|-]+)", help_output))
-
-    supported_flags: Set[str] = set()
-    for flag_group in raw_found_flags:
-        for flag in re.split(r"[,|/]", flag_group):
-            clean_flag = flag.strip()
-            supported_flags.add(clean_flag)
-
-    # Accept '_' and '-' interchangeably within a name (--batch_size vs --batch-size).
-    # Only the name is rewritten: swapping the leading dashes too would turn
-    # '--batch-size' into '__batch_size', which never matches.
-    unsupported = []
-    for flag in flags_to_check:
-        name = flag.lstrip("-")
-        dashes = flag[: len(flag) - len(name)]
-        variants = {flag, dashes + name.replace("_", "-"), dashes + name.replace("-", "_")}
-
-        if not (variants & supported_flags):
-            unsupported.append(flag)
-
-    # Positional arguments have no flag to look for; compare their number with the
-    # usage line instead. Usage formats vary, so a mismatch only warns.
-    if config.positional_args:
-        found = count_usage_positionals(help_output)
-        expected = len(config.positional_args)
-        if found is not None and found != expected:
-            print(
-                f"[WARNING] The executable's usage line lists {found} positional argument(s), but "
-                f"positional_args has {expected} ({', '.join(config.positional_args)}).",
-                file=sys.stderr,
-            )
-
-    return len(unsupported) == 0, unsupported
-
-def submit_slurm_script(
-    script_path: Path,
-    config: AppConfig,
-    checkargs_q: bool,
-    backup_dir: Optional[Path] = None,
-) -> None:
-    """Submits the generated script to SLURM.
-
-    If submission was attempted but produced no job - a rejected sbatch, a
-    missing sbatch, or arguments that failed validation before sbatch ran - the
-    run's backup directory is discarded, so only snapshots corresponding to a
-    real job survive. A run generated without --submit keeps its snapshot, since
-    it is still waiting to be submitted by hand.
-    """
-
-    if checkargs_q:
-        print("\n[INFO] Validating arguments passed to executable...")
-        print("[INFO] This may take some time. Use --noargcheck to disable argument checking.")
-
-        validation_result, failed_args = validate_script_args(config)
-        if not validation_result:
-            print("\n[ERROR] Argument validation failed!", file=sys.stderr)
-            print(f"[ERROR] Offending args: {' '.join(failed_args)}", file=sys.stderr)
-            discard_backup_dir(backup_dir)
-            sys.exit(1)
-        else:
-            print("\n[SUCCESS] Argument validation succeeded!")
-    
-    print(f"\n[INFO] Submitting {script_path} to SLURM...")
-    try:
-        # Calls sbatch. The embedded checkpoint logic handles skips securely.
-        result = subprocess.run(["sbatch", str(script_path)], check=True, capture_output=True, text=True)
-        print(f"[SUCCESS] {result.stdout.strip()}")
-    except subprocess.CalledProcessError as e:
-        print(f"[ERROR] SLURM Submission failed:\n{e.stderr}", file=sys.stderr)
-        discard_backup_dir(backup_dir)
-        sys.exit(1)
-    except FileNotFoundError:
-        print("[ERROR] 'sbatch' command not found. Are you on a SLURM cluster node?", file=sys.stderr)
-        discard_backup_dir(backup_dir)
-        sys.exit(1)
-
-def process_datasets(config_path: str) -> None:
-    """Combines every 'outer_loops' tabular source into one row-wise concatenated table.
-
-    Each source's columns are extracted in its declared 'args' order (validated to match
-    in count across all sources), the sources are concatenated row-wise, then 'process'
-    optionally renames the columns and filters rows via 'cuts' before the result is
-    written to 'output_file_path' as CSV.
-
-    Unlike 'generate', this mode has no --dryrun: producing the combined table is the
-    entire point of running it, and doing so always requires the source files to exist,
-    so file-existence checks are never skipped.
-
-    Args:
-        config_path: Path to the config file.
-    """
-    cfg = get_dict_from_config_file(config_path)
-    config: AppConfig = validate_config(cfg, config_path, dryrunQ=False)
-    print(f"[SUCCESS] Config validation passed for '{config_path}'.")
-
-    combined_rows: List[Dict[str, Any]] = []
-    for block in config.outer_loops:
-        combined_rows.extend(_evaluate_tabular_rows(block))
-    print(f"[INFO] Extracted {len(combined_rows)} row(s) from {len(config.outer_loops)} source(s).")
-
-    process_cfg = config.process
-    column_names = process_cfg.column_names if process_cfg else None
-    if column_names:
-        # Positional rename: schema validation already guarantees every row has exactly
-        # len(column_names) values, since all sources were required to select the same
-        # column count.
-        combined_rows = [dict(zip(column_names, row.values())) for row in combined_rows]
-
-    if process_cfg and process_cfg.cuts:
-        before = len(combined_rows)
-        combined_rows = [
-            row for row in combined_rows
-            if all(_evaluate_cut(expr, row) for expr in process_cfg.cuts)
-        ]
-        print(f"[INFO] Cuts kept {len(combined_rows)}/{before} row(s).")
-
-    output_path = config.output_file_path
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = column_names or (list(combined_rows[0].keys()) if combined_rows else [])
-
-    with open(output_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(combined_rows)
-
-    print(f"[SUCCESS] Wrote {len(combined_rows)} row(s) to '{output_path}'.")
