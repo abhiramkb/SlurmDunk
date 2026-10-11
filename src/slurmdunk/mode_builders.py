@@ -63,7 +63,7 @@ run_inner_task() {
 @@EXP_ARGS_BLOCK@@
     print_args "$indicator" "@@FIXED_ARGS@@ $outer_args_str $inner_args_str $exp_args"
 @@PRINT_POSITIONALS@@
-    {
+@@RECORD_GIT@@    {
         starttime=$(date +%s%N)
         echo "Job started at: $(date)"
 @@CONCURRENCY_INFO@@
@@ -401,6 +401,61 @@ def build_positional(
     return frag
 
 
+# ---------------------------------------------------------------------------
+# Git provenance (execution.git_provenance)
+# ---------------------------------------------------------------------------
+
+RECORD_GIT_FN = r'''
+# Logs the executable's git state before each run (execution.git_provenance). The
+# repository is dirty when tracked files have uncommitted changes (untracked files
+# don't count); the executable is dirty when it has changes or git doesn't track it,
+# since then no commit describes it. Read-only: --no-optional-locks keeps git from
+# writing its index, so concurrent runs don't contend for the lock.
+record_git() {
+    local ind="$1" dir top commit repo_dirty exec_dirty
+    if [ -z "$GIT_EXEC_PATH" ] || ! command -v git >/dev/null 2>&1; then
+        echo "[${ind}_git] repo: none"
+        return 0
+    fi
+    dir=$(dirname "$GIT_EXEC_PATH")
+    if ! top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null); then
+        echo "[${ind}_git] repo: none"
+        return 0
+    fi
+    commit=$(git -C "$dir" rev-parse HEAD 2>/dev/null)
+    repo_dirty=false
+    if [ -n "$(git --no-optional-locks -C "$dir" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+        repo_dirty=true
+    fi
+    exec_dirty=false
+    if ! git -C "$dir" ls-files --error-unmatch -- "$GIT_EXEC_PATH" >/dev/null 2>&1 \
+        || [ -n "$(git --no-optional-locks -C "$dir" status --porcelain -- "$GIT_EXEC_PATH" 2>/dev/null)" ]; then
+        exec_dirty=true
+    fi
+    echo "[${ind}_git] repo: $top"
+    echo "[${ind}_git] commit: ${commit:-none}"
+    echo "[${ind}_git] repo_dirty: $repo_dirty"
+    echo "[${ind}_git] exec_dirty: $exec_dirty"
+}'''
+
+
+def build_git_provenance(ctx: Dict[str, Any], config: AppConfig) -> Dict[str, str]:
+    """Bash for execution.git_provenance; every fragment is '' when it is off, which
+    keeps such scripts byte-identical to before the feature existed."""
+    if not config.execution.git_provenance:
+        return {"block": "", "call": "", "single": ""}
+    exe = str(config.execution.executable)
+    if "/" in exe:
+        path = bash_double_quote(ctx["exec_path"])
+    else:  # a bare command, found on PATH when the job runs
+        path = f'"$(command -v {bash_double_quote(exe)} 2>/dev/null)"'
+    return {
+        "block": f"\n\nGIT_EXEC_PATH={path}" + RECORD_GIT_FN,
+        "call": '    record_git "$indicator"\n',
+        "single": '\nrecord_git "$indicator"',
+    }
+
+
 def fill_positional_tokens(text: str, pos: Dict[str, str]) -> str:
     for token in POS_TOKENS:
         text = text.replace(token, pos[token])
@@ -411,6 +466,7 @@ def build_inner_driver(
     ctx: Dict[str, Any],
     config: AppConfig,
     pos: Dict[str, str],
+    git: Dict[str, str],
     indicator_prefix: str = "",
     wrap_outer_loop: bool = False,
 ) -> str:
@@ -452,7 +508,8 @@ def build_inner_driver(
         .replace("@@EXP_ARGS_BLOCK@@", ctx["exp_args_block"])
         .replace("@@FIXED_ARGS@@", ctx["fixed_args_bash"])
         .replace("@@CONCURRENCY_INFO@@", concurrency_info)
-        .replace("@@EXEC_CMD@@", exec_cmd),
+        .replace("@@EXEC_CMD@@", exec_cmd)
+        .replace("@@RECORD_GIT@@", git["call"]),
         pos,
     )
 
@@ -553,6 +610,7 @@ def build_single_mode(ctx: Dict[str, Any], config: AppConfig) -> Optional[str]:
         return None
 
     pos = build_positional(config)
+    git = build_git_provenance(ctx, config)
     exec_cmd = build_exec_command(
         ctx["exec_cfg"], ctx["flags_str"], ctx["fixed_args_bash"], "", pos["exec_slot"]
     )
@@ -562,7 +620,7 @@ def build_single_mode(ctx: Dict[str, Any], config: AppConfig) -> Optional[str]:
 cd "{ctx['exec_dir']}" || exit 1
 
 indicator="SINGLE"
-EXEC_SIG="{ctx['exec_sig_bash']}"{pos['block']}
+EXEC_SIG="{ctx['exec_sig_bash']}"{pos['block']}{git['block']}
 exec_hash=$(printf '%s' "$EXEC_SIG" | md5sum | cut -d ' ' -f 1)
 CHECKPOINT_FILE="$CHECKPOINT_DIR/${{indicator}}_${{exec_hash}}.done"
 
@@ -580,7 +638,7 @@ echo "Flags: {ctx['fixed_args_bash']}"{pos['legend']}
 echo "================================================================"
 
 {ctx['exp_args_block']}
-print_args "$indicator" "{ctx['fixed_args_bash']} $exp_args"{pos['single']}
+print_args "$indicator" "{ctx['fixed_args_bash']} $exp_args"{pos['single']}{git['single']}
 
 {{
     starttime=$(date +%s%N)
@@ -711,14 +769,15 @@ def build_inner_loop_mode(ctx: Dict[str, Any], config: AppConfig) -> Optional[st
     arg_names_display = ", ".join(arg_names)
 
     pos = build_positional(config, inner_items=pending_tasks)
-    inner_driver = build_inner_driver(ctx, config, pos, indicator_prefix="")
+    git = build_git_provenance(ctx, config)
+    inner_driver = build_inner_driver(ctx, config, pos, git, indicator_prefix="")
 
     return f"""{ctx['common_header']}
 
 # Navigate to executable directory to preserve repo/git context
 cd "{ctx['exec_dir']}" || exit 1
 
-EXEC_SIG="{ctx['exec_sig_bash']}"{pos['block']}
+EXEC_SIG="{ctx['exec_sig_bash']}"{pos['block']}{git['block']}
 
 # No outer loop in this mode; the shared inner driver expects the variable.
 outer_args_str=""
@@ -864,8 +923,9 @@ def build_job_array_mode(
     # output directory. Unpacked they are equal, so existing checkpoints and
     # result directories keep their historical names.
     pos = build_positional(config, outer_combinations, list(enumerate(evaluated_inner, start=1)))
+    git = build_git_provenance(ctx, config)
     inner_driver = build_inner_driver(
-        ctx, config, pos, indicator_prefix="A${o_idx}_", wrap_outer_loop=True
+        ctx, config, pos, git, indicator_prefix="A${o_idx}_", wrap_outer_loop=True
     )
 
     script_content = f"""{header_with_array}
@@ -873,7 +933,7 @@ def build_job_array_mode(
 # Navigate to executable directory to preserve repo/git context
 cd "{ctx['exec_dir']}" || exit 1
 
-EXEC_SIG="{ctx['exec_sig_bash']}"{pos['block']}
+EXEC_SIG="{ctx['exec_sig_bash']}"{pos['block']}{git['block']}
 
 # Complete outer loop array indexed by original task IDs
 OUTER_ARGS=(

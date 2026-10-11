@@ -49,7 +49,8 @@ slurmdunk collect "$CFG"             # gather finished results into results.sqli
 | `collect` | `--job-id 12345678` | Same, one job only → `results_12345678.*`. |
 | `collect` | `--output-dir DIR` | You want the results somewhere other than the experiment directory. |
 
-`collect` always records each run's arguments, status, exit code and run time. To also pull a value
+`collect` always records each run's arguments, status, exit code and run time, and, if your program
+lives in a git repository, its commit and whether it had uncommitted changes. To also pull a value
 out of what your code prints, write the line as it appears with `{name}` where the value is:
 
 ```yaml

@@ -25,6 +25,9 @@ RUN_INFO_COLUMNS = (
     "job_id", "indicator", "array_task_id", "status", "exit_code", "job_duration", "log_file",
 )
 
+# Filled from the [<indicator>_git] lines (execution.git_provenance), when present
+GIT_COLUMNS = ("git_repo", "git_commit", "git_repo_dirty", "git_exec_dirty")
+
 # Used when the config does not say where a run's JSON is: the per-run directory
 # made by the conventional '{save_dir}_{run}' tracking arg.
 DEFAULT_JSON_PATH = "{exp_dir}/{job_id}_{run}/result*.json"
@@ -202,7 +205,7 @@ def apply_patterns(lines: List[Tuple[str, str]], patterns: List[Any]) -> Dict[st
 # SLURM log parsing
 # =========================================================================
 
-_LOG_LINE_RE = re.compile(r"^\[(SINGLE|(?:A\d+_)?L\d+)_(args|out|err)\] ?(.*)$")
+_LOG_LINE_RE = re.compile(r"^\[(SINGLE|(?:A\d+_)?L\d+)_(args|out|err|git)\] ?(.*)$")
 _FINISHED_RE = re.compile(r"^Job finished at: .* with Exit Code: (-?\d+)\s*$")
 _DURATION_RE = re.compile(r"^Job duration: ([\d.]+) seconds\s*$")
 
@@ -231,7 +234,7 @@ def find_log_files(
 
 def _new_run(indicator: str) -> Dict[str, Any]:
     return {
-        "indicator": indicator, "args": {}, "lines": [],
+        "indicator": indicator, "args": {}, "git": {}, "lines": [],
         "started": False, "finished": False, "exit_code": None, "duration": None,
     }
 
@@ -265,6 +268,11 @@ def parse_runs(log_path: Path) -> List[Dict[str, Any]]:
 
             if run is None:
                 run = runs[indicator] = _new_run(indicator)
+            if stream == "git":
+                name, sep, value = text.partition(":")
+                if sep:
+                    run["git"][name.strip()] = value.strip()
+                continue
             if stream == "out":
                 if text.startswith("Job started at: "):
                     run["started"] = True
@@ -509,7 +517,8 @@ def collect_results(
         return
 
     pattern_names = [name for spec in patterns for name in pattern_matcher(spec)[1]]
-    reserved = set(pattern_names) | arg_names
+    reserved = set(pattern_names) | arg_names | set(GIT_COLUMNS)
+    has_git = False
     arg_columns: Dict[str, None] = {}
     json_columns: Dict[str, None] = {}
     pattern_hits = Counter()
@@ -529,8 +538,19 @@ def collect_results(
                 "log_file": log_path.name,
             }
 
+            if run["git"]:
+                has_git = True
+                git = run["git"]
+                in_repo = git.get("repo", "none") != "none"
+                row.update({
+                    "git_repo": git.get("repo") if in_repo else None,
+                    "git_commit": git.get("commit") if in_repo and git.get("commit") != "none" else None,
+                    "git_repo_dirty": git.get("repo_dirty") == "true" if in_repo else None,
+                    "git_exec_dirty": git.get("exec_dirty") == "true" if in_repo else None,
+                })
+
             for name, raw in run["args"].items():
-                column = f"arg.{name}" if name in RUN_INFO_COLUMNS else name
+                column = f"arg.{name}" if name in RUN_INFO_COLUMNS + GIT_COLUMNS else name
                 # A switch is printed with an empty value
                 row[column] = True if raw == "" else convert_auto(raw)
                 arg_columns.setdefault(column)
@@ -558,7 +578,7 @@ def collect_results(
             rows[row["job_id"]] = row
 
     columns = (
-        list(RUN_INFO_COLUMNS) + list(arg_columns)
+        list(RUN_INFO_COLUMNS) + (list(GIT_COLUMNS) if has_git else []) + list(arg_columns)
         + [n for n in pattern_names if n not in arg_columns]
         + [c for c in json_columns if c not in arg_columns and c not in pattern_names]
     )

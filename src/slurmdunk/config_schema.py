@@ -6,7 +6,7 @@ from pydantic import AliasChoices, BaseModel, Field, ValidationError, Validation
 
 # Pattern compilation is shared with the collector, so template errors surface when
 # the config is loaded rather than mid-collection
-from .collect import DEFAULT_JSON_PATH, RUN_INFO_COLUMNS, pattern_matcher
+from .collect import DEFAULT_JSON_PATH, GIT_COLUMNS, RUN_INFO_COLUMNS, pattern_matcher
 from .utils import check_positional_value, format_cli_arg
 
 def resolve_config_path(path: Union[str, Path], info: ValidationInfo) -> Path:
@@ -148,6 +148,9 @@ class ExecutionConfig(BaseModel):
     multithreading_level: Optional[int] = Field(default=None, ge=1)
     # Optional hard ceiling on concurrency, e.g. to stay within --mem.
     max_parallel_tasks: Optional[int] = Field(default=None, ge=1)
+    # Log the executable's git commit, and whether it or its repository has uncommitted
+    # changes, before every run (see "Git provenance" in README.md).
+    git_provenance: bool = True
 
     @field_validator("executable")
     @classmethod
@@ -397,10 +400,10 @@ class CollectConfig(BaseModel):
         seen: Dict[str, str] = {}
         for spec in self.patterns:
             for name in spec.names:
-                if name in RUN_INFO_COLUMNS:
+                if name in RUN_INFO_COLUMNS + GIT_COLUMNS:
                     raise ValueError(
                         f"placeholder '{name}' in pattern {spec.label!r} reuses a built-in column "
-                        f"({', '.join(RUN_INFO_COLUMNS)})."
+                        f"({', '.join(RUN_INFO_COLUMNS + GIT_COLUMNS)})."
                     )
                 if name in seen:
                     raise ValueError(

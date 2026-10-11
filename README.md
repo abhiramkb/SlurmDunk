@@ -41,6 +41,7 @@ python3 -m pip install --user -e /path/to/SlurmDunk
 - **Standard tools:** GNU coreutils (`md5sum`, `date +%N`, `tail`, `wc`) and `sed`.
 - **`taskset`** from util-linux. It is optional: it pins concurrent runs to their own cores, and is skipped when absent.
 - **Lmod or Environment Modules**, only if `execution.modules` is set.
+- **git**, optional, for [git provenance](#git-provenance). Without it, runs log `repo: none`.
 
 **Tested on:** CSC's Roihu (Slurm 25.05 and 26.05, bash 5.1.8, Python 3.9.25). Other SLURM clusters that meet the requirements above should work, but have not been tested.
 
@@ -130,6 +131,7 @@ In job array mode the outer combinations form the SLURM array (one task per Cart
 | `epilogue` | String | `null` | The counterpart of `preamble`: free-form Bash pasted verbatim at the very end of the script, run once every executable invocation has finished (in parallel mode, after all concurrent runs are drained) — e.g. archiving or post-processing results. It runs in the executable's directory and shares the shell with the preamble, so variables set there are still visible. In array mode it runs at the end of **each** array element, not once after the whole array; use a separate job with `--dependency=afterany:<jobid>` for that. It does not run if the job is killed (walltime, `scancel`), and its last command's exit status becomes the job's. |
 | `multithreading_level` | Integer | `null` | Cores used by **one** invocation of the executable. When set, the inner loop runs `SLURM_CPUS_PER_TASK / multithreading_level` iterations concurrently. Omit for a strictly sequential inner loop. |
 | `max_parallel_tasks` | Integer | `null` | Hard ceiling on concurrent runs, regardless of how many cores are free — mainly to stay within `--mem`. |
+| `git_provenance` | Boolean | `true` | Log the executable's git commit and whether it or its repository has uncommitted changes, before every run; see [Git provenance](#git-provenance). |
 
 ### `slurm`
 
@@ -537,6 +539,7 @@ Every row always carries, with no configuration:
 | `indicator`, `array_task_id`, `log_file` | Which run, array task and log file the row came from. |
 | `status`, `exit_code` | `completed` (exit 0), `failed` (non-zero exit) or `interrupted` (started but never finished: walltime, cancellation, node failure). |
 | `job_duration` | Seconds, from the script's own timing line. |
+| `git_repo`, `git_commit`, `git_repo_dirty`, `git_exec_dirty` | The executable's [git provenance](#git-provenance) for that run; empty when it is not in a git repository. Present when the logs contain it. |
 | one column per argument | Every argument passed to the executable, whether spelled `-x` or `--beta`, is logged as a `[<indicator>_args] <name>: <value>` line and becomes a column, e.g. `x`, `beta`, `save_dir`. Numbers are stored as numbers; a switch printed without a value is stored as true. An argument named like one of the columns above becomes `arg.<name>`. |
 
 Checkpoint-skipped runs produce no row: a skipped run's row comes from the log of the job that actually ran it. The output is rebuilt on every collect, so re-running after more jobs finish simply picks them up.
@@ -631,6 +634,30 @@ Executing Subtasks: 40 / 100 Outer Runs
 [A0_L3_err] Warning: Convergence threshold near limit.
 [A0_L3_out] Job duration: 1.980 seconds
 ```
+
+---
+
+## Git provenance
+
+Before each run, the generated script records the git state of the executable (the program file, or the script given to the interpreter) in the SLURM output:
+
+```text
+[A0_L1_git] repo: /projappl/myproject/my_code
+[A0_L1_git] commit: 3f9c2e1d…
+[A0_L1_git] repo_dirty: false
+[A0_L1_git] exec_dirty: false
+```
+
+- **`commit`:** the checked-out commit (`HEAD`) of the repository holding the executable.
+- **`repo_dirty`:** `true` when tracked files in that repository have uncommitted changes. Untracked files, such as results lying around, don't count.
+- **`exec_dirty`:** `true` when the executable itself has uncommitted changes, or when git doesn't track it at all (untracked or ignored), since then no commit describes it.
+- **Not in a repository:** an executable outside any git repository (or a system without `git`) logs `repo: none`. A bare command name is looked up on `PATH` when the job runs.
+
+It is recorded before every run rather than once per job, so an edit made while a job is queued or running shows up on exactly the runs it affected. It's cheap: about 25 ms per run for a repository of a few dozen files on CSC's `/projappl`. The checks are read-only (`--no-optional-locks`), so concurrent runs don't contend for git's index lock.
+
+`collect` turns these lines into the columns `git_repo`, `git_commit`, `git_repo_dirty` and `git_exec_dirty`. If your program also writes a `git_commit` into its JSON output, the two merge into one column when they agree, and the program's value keeps its dotted path when they don't.
+
+Set `execution.git_provenance: false` to turn it off; the generated script is then exactly what it would be without the feature.
 
 ---
 
