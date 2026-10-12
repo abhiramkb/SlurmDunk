@@ -32,7 +32,7 @@ CFG=my_config.yaml
 
 slurmdunk "$CFG"                     # (generate) write the script, don't submit
 slurmdunk generate "$CFG" --submit   # write it and sbatch it
-slurmdunk collect "$CFG"             # gather finished results into results.sqlite
+slurmdunk collect "$CFG"             # gather finished results into results.db
 ```
 
 `examples/sweep.yaml` is a small, commented config to start from.
@@ -44,7 +44,7 @@ slurmdunk collect "$CFG"             # gather finished results into results.sqli
 | `generate` | `--noargcheck` | Startup complains your executable doesn't support a flag, but you know it does. |
 | `generate` | `--notimecheck` | You don't want `time` validated against the partition's `MaxTime`. |
 | `generate` | `--nodupcheck` | You really do want to submit a config again while its earlier jobs are still queued or running. |
-| `collect` | *(none)* | Jobs are done and you want one row per run in `results.sqlite`. |
+| `collect` | *(none)* | Jobs are done and you want one row per run in `results.db`. |
 | `collect` | `--format both` | You also (or only, with `csv`) want `results.csv`. |
 | `collect` | `--job-id 12345678` | Same, one job only → `results_12345678.*`. |
 | `collect` | `--output-dir DIR` | You want the results somewhere other than the experiment directory. |
@@ -245,7 +245,7 @@ A current, working example of both: `yaml_nlo_diff/dip_kcbk_allbks_mvgam,pd_HERA
 ├── SLURM_OUTPUT/            # job logs (whatever you called slrm_output_dir)
 ├── checkpoints/             # "this run finished" markers
 ├── <job_id>_<indicator>/    # one output directory per run ($SAVE_DIR)
-└── results.sqlite           # after `collect` (results.csv with --format csv/both)
+└── results.db               # after `collect` (results.csv with --format csv/both)
 ```
 
 Log lines are tagged by run, so an array log stays readable:

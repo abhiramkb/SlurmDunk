@@ -3,7 +3,7 @@ submit_*.sh
 
 # Result databases
 *.db
-*.sqlite
+*.db
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

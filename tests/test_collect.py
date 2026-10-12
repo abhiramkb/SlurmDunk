@@ -113,7 +113,7 @@ def test_rows_patterns_and_json(tmp_path, experiment_dir):
     cfg = make_config(tmp_path, experiment_dir, ALL_FEATURES)
     out = slurmdunk("collect", cfg, "--output-dir", tmp_path / "out", cwd=tmp_path)
     assert out.returncode == 0, out.stderr
-    cols, rows = load(tmp_path / "out" / "results.sqlite")
+    cols, rows = load(tmp_path / "out" / "results.db")
 
     # one row per run that ran: checkpoint skips and the other experiment's log add none
     assert sorted(rows) == ["5001_L1", "500_A0_L1", "500_A0_L2", "500_A1_L1", "600_SINGLE"]
@@ -144,15 +144,15 @@ def test_rows_patterns_and_json(tmp_path, experiment_dir):
 def test_job_id_is_exact(tmp_path, experiment_dir):
     cfg = make_config(tmp_path, experiment_dir)
     slurmdunk("collect", cfg, "--job-id", "500", "--output-dir", tmp_path / "o1", cwd=tmp_path, check=True)
-    assert sorted(load(tmp_path / "o1" / "results_500.sqlite")[1]) == ["500_A0_L1", "500_A0_L2", "500_A1_L1"]
+    assert sorted(load(tmp_path / "o1" / "results_500.db")[1]) == ["500_A0_L1", "500_A0_L2", "500_A1_L1"]
     slurmdunk("collect", cfg, "--job-id", "500_1", "--output-dir", tmp_path / "o2", cwd=tmp_path, check=True)
-    assert sorted(load(tmp_path / "o2" / "results_500_1.sqlite")[1]) == ["500_A1_L1"]
+    assert sorted(load(tmp_path / "o2" / "results_500_1.db")[1]) == ["500_A1_L1"]
 
 
 def test_json_null_and_quiet_default(tmp_path, experiment_dir):
     cfg = make_config(tmp_path, experiment_dir, {"json": None})
     out = slurmdunk("collect", cfg, "--output-dir", tmp_path / "o1", cwd=tmp_path, check=True)
-    cols = load(tmp_path / "o1" / "results.sqlite")[0]
+    cols = load(tmp_path / "o1" / "results.db")[0]
     assert not {"metrics.x", "meta.x", "json.status", "flag", "list"} & set(cols)
     # Without a collect block the default lookup finds nothing here, and says nothing about it
     cfg = make_config(tmp_path, experiment_dir)
@@ -189,5 +189,5 @@ def test_default_json_lookup_uses_job_and_run(tmp_path, experiment_dir):
     (run_dir / "result.json").write_text(json.dumps({"metrics": {"energy": -1.5}}))
     cfg = make_config(tmp_path, experiment_dir)
     slurmdunk("collect", cfg, "--output-dir", tmp_path / "o", cwd=tmp_path, check=True)
-    rows = load(tmp_path / "o" / "results.sqlite")[1]
+    rows = load(tmp_path / "o" / "results.db")[1]
     assert rows["500_A0_L1"]["energy"] == -1.5 and rows["500_A0_L2"]["energy"] is None

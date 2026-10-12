@@ -607,7 +607,7 @@ def collect_results(
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = "results" if job_id is None else f"results_{job_id}"
     cells, types = table_cells(columns, row_list)
-    writers = {"sqlite": (write_sqlite, ".sqlite"), "csv": (write_csv, ".csv")}
+    writers = {"sqlite": (write_sqlite, ".db"), "csv": (write_csv, ".csv")}
     for fmt in dict.fromkeys(formats):
         writer, suffix = writers[fmt]
         out_path = out_dir / f"{stem}{suffix}"

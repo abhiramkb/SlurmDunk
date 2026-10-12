@@ -29,29 +29,32 @@ Other files, such as `notes.txt`, are never offered where a config path goes, an
 Bash itself only knows a completion once something has run `complete … slurmdunk`. The script does exactly that on its last line:
 
 ```bash
-complete -o filenames -F _slurmdunk slurmdunk
+complete -o filenames -F _slurmdunk slurmdunk sd
 ```
 
-This tells bash to call the function `_slurmdunk` whenever Tab is pressed after `slurmdunk`. `-o filenames` makes bash treat the suggestions as file names, so a folder gets a trailing `/` and no space.
+This tells bash to call the function `_slurmdunk` whenever Tab is pressed after `slurmdunk` or its short name `sd`. `-o filenames` makes bash treat the suggestions as file names, so a folder gets a trailing `/` and no space.
 
 The script has to be *sourced* by your shell before that line runs. The **bash-completion** package, which most Linux systems load in interactive shells, does this on demand. The first time you press Tab after a command it has no completion for, it looks for a file named after the command in, in order:
 
 1. `$BASH_COMPLETION_USER_DIR/completions/`, or if that is unset, `${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/`. This is your personal folder.
 2. `bash-completion/completions/` under each directory in `$XDG_DATA_DIRS` (by default `/usr/local/share` and `/usr/share`). These are the system folders.
 
-If it finds a file called `slurmdunk`, it sources it, and the `complete` line above takes effect. Nothing needs to be added to `~/.bashrc`, and the file is only read when you first use it.
+If it finds a file called `slurmdunk` (or `sd`, for Tab after `sd`), it sources it, and the `complete` line above takes effect. Nothing needs to be added to `~/.bashrc`, and the file is only read when you first use it.
 
 ---
 
 ## 3. Installing it
 
-With bash-completion present, link the script into your personal folder under the command's name:
+With bash-completion present, link the script into your personal folder under each command's name:
 
 ```bash
 dir="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
 mkdir -p "$dir"
 ln -s /path/to/SlurmDunk/completions/slurmdunk.bash "$dir/slurmdunk"
+ln -s /path/to/SlurmDunk/completions/slurmdunk.bash "$dir/sd"
 ```
+
+- **Why two links:** bash-completion looks for a file named after the command being completed, so `sd` needs its own link, even though both point to the same script.
 
 - **Why a symlink:** a symlink rather than a copy means a later `git pull` of SlurmDunk updates the completion too.
 - **Which variable:** use `$XDG_DATA_HOME` in the command as written, not a hard-coded `~/.local/share`, because some systems set it elsewhere (see section 4).
@@ -87,6 +90,8 @@ So bash-completion looks in `~/.local/share/aarch64/bash-completion/completions/
 ```
 ~/.local/share/aarch64/bash-completion/completions/slurmdunk
     -> /projappl/lappi/abhiram/SlurmDunk/completions/slurmdunk.bash
+~/.local/share/aarch64/bash-completion/completions/sd
+    -> /projappl/lappi/abhiram/SlurmDunk/completions/slurmdunk.bash
 ```
 
 **Verified** by asking bash-completion's own loader to load it, as a Tab press would, and then calling the function:
@@ -94,6 +99,8 @@ So bash-completion looks in `~/.local/share/aarch64/bash-completion/completions/
 ```bash
 bash -ic '_completion_loader slurmdunk; complete -p slurmdunk'
 # complete -o filenames -F _slurmdunk slurmdunk
+bash -ic '_completion_loader sd; complete -p sd'
+# complete -o filenames -F _slurmdunk sd
 ```
 
 **Other architectures:** if you also work on x86 login nodes, check `echo $XDG_DATA_HOME $PYTHONUSERBASE` there. If they are set per architecture as well, both the `pip install --user -e …` and this symlink need repeating on that architecture.
@@ -137,7 +144,7 @@ The word lists duplicate what `src/slurmdunk/cli.py` defines with `argparse`, so
 | :--- | :--- |
 | `test_word_lists_match_the_cli` | Each word list equals what the real parser (`build_arg_parser()`) defines: the subcommands, the global options, each subcommand's options, and the choices of `--format` |
 | `test_every_option_taking_a_value_is_handled` | Every option that takes a value has its own branch in step 1 above, so Tab after it offers values, not config files |
-| `test_suggestions` (10 cases) | Runs `_slurmdunk` in bash for typed command lines, in a folder holding configs, a `.txt` file and a subfolder, and compares the suggestions, including the bare-config-path case |
+| `test_suggestions` (11 cases) | Runs `_slurmdunk` in bash for typed command lines, in a folder holding configs, a `.txt` file and a subfolder, and compares the suggestions, including the bare-config-path case |
 
 They need no SLURM, and run with the rest of the suite (`python3 -m pytest`). As a check that the sync test bites, renaming `--nodupcheck` in a copy of `cli.py` made `test_word_lists_match_the_cli` fail.
 

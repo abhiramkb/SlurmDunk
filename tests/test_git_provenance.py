@@ -62,7 +62,7 @@ def test_clean_repository(tmp_path, repo):
     assert logged == {"L1": expected, "L2": expected}
 
     slurmdunk("collect", config, cwd=tmp_path, check=True)
-    con = sqlite3.connect(tmp_path / "db" / "g" / "results.sqlite")
+    con = sqlite3.connect(tmp_path / "db" / "g" / "results.db")
     cols = [c[1] for c in con.execute("pragma table_info(runs)")]
     assert cols[7:11] == ["git_repo", "git_commit", "git_repo_dirty", "git_exec_dirty"]
     assert set(con.execute("select git_commit, git_repo_dirty, git_exec_dirty from runs")) == {(head, 0, 0)}
@@ -116,7 +116,7 @@ def test_outside_a_repository_and_bare_commands(tmp_path, stub):
     logged, config, _ = run_and_read(tmp_path, stub)
     assert logged == {"L1": {"repo": "none"}}
     slurmdunk("collect", config, cwd=tmp_path, check=True)
-    con = sqlite3.connect(tmp_path / "db" / "g" / "results.sqlite")
+    con = sqlite3.connect(tmp_path / "db" / "g" / "results.db")
     assert list(con.execute("select git_repo, git_commit, git_repo_dirty, git_exec_dirty from runs")) == \
         [(None, None, None, None)]
     # A bare command is looked up on PATH when the job runs; 'true' is not in a repository
@@ -145,6 +145,6 @@ def test_json_git_commit_merges_with_the_column(tmp_path, repo):
     for run, commit in (("L1", head), ("L2", "0123abc")):
         (root / "g" / f"4243_{run}" / "result.json").write_text(json.dumps({"provenance": {"git_commit": commit}}))
     slurmdunk("collect", config, cwd=tmp_path, check=True)
-    con = sqlite3.connect(root / "g" / "results.sqlite")
+    con = sqlite3.connect(root / "g" / "results.db")
     rows = {r[0]: r[1:] for r in con.execute('select indicator, git_commit, "provenance.git_commit" from runs')}
     assert rows == {"L1": (head, None), "L2": (head, "0123abc")}

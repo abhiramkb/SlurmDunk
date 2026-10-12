@@ -38,7 +38,7 @@ def test_relative_paths_follow_the_config(tmp_path, stub):
 
     # collect, also run from elsewhere, finds the logs under the config's folder
     slurmdunk("collect", config, cwd=elsewhere, check=True)
-    assert (base / "out" / "rel" / "results.sqlite").is_file()
+    assert (base / "out" / "rel" / "results.db").is_file()
 
 
 def test_bare_command_is_left_for_path_lookup(tmp_path):

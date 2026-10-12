@@ -20,6 +20,7 @@ test = ["pytest"]
 
 [project.scripts]
 slurmdunk = "slurmdunk.cli:main"
+sd = "slurmdunk.cli:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "slurmdunk.__version__"}

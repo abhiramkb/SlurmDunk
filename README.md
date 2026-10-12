@@ -20,7 +20,7 @@ From a checkout of this repository:
 python3 -m pip install --user -e /path/to/SlurmDunk
 ```
 
-- **The command:** this installs `slurmdunk` into your user `bin` directory (`$(python3 -m site --user-base)/bin`, which should be on your `PATH`). pydantic and PyYAML come along as dependencies.
+- **The command:** this installs `slurmdunk` into your user `bin` directory (`$(python3 -m site --user-base)/bin`, which should be on your `PATH`), along with `sd`, a short name for the same command. pydantic and PyYAML come along as dependencies.
 - **Which Python:** install with the Python that should run SlurmDunk. On a cluster that is usually the system `/usr/bin/python3`, not one from a loaded module. The installed command remembers it, so loading other modules later does not matter.
 - **Editable install:** with `-e`, changes to the checkout take effect without reinstalling, and generated scripts record the checkout's git commit.
 - **Without installing:** `python3 -m slurmdunk …` works too, as long as the package is importable.
@@ -74,7 +74,7 @@ slurmdunk generate my_config.json --submit
 # Generate without touching SLURM, and skip file-existence checks
 slurmdunk generate my_config.json --dryrun
 
-# Collect one row per run into results.sqlite (and/or results.csv)
+# Collect one row per run into results.db (and/or results.csv)
 slurmdunk collect my_config.json
 slurmdunk collect my_config.json --job-id 12345678 --format both
 ```
@@ -237,7 +237,7 @@ This yields the layout:
 ├── <slrm_output_dir>/       # SLURM logs
 ├── checkpoints/             # completion markers
 ├── <job_id>_<indicator>/    # per-run output directories ($SAVE_DIR)
-└── results.sqlite           # written by 'collect' (results.csv with --format csv/both)
+└── results.db               # written by 'collect' (results.csv with --format csv/both)
 ```
 
 Without an `experiment` block, checkpoints go to `./checkpoints` relative to the submission directory and no result directories are created.
@@ -540,7 +540,7 @@ Deleting a marker forces the corresponding run to repeat; deleting the `checkpoi
 
 ## Result Collection
 
-`slurmdunk collect my_config.json` reads the SLURM logs under `<result_database_path>/<experiment_name>/<slrm_output_dir>` and writes **one row per run** to `results.sqlite` (table `runs`) and/or `results.csv` in the experiment directory. It works for any executable, because the generated scripts label every line of a run's output with that run (see [Log Output & Stream Tagging](#log-output--stream-tagging)).
+`slurmdunk collect my_config.json` reads the SLURM logs under `<result_database_path>/<experiment_name>/<slrm_output_dir>` and writes **one row per run** to `results.db` (table `runs`) and/or `results.csv` in the experiment directory. It works for any executable, because the generated scripts label every line of a run's output with that run (see [Log Output & Stream Tagging](#log-output--stream-tagging)).
 
 Every row always carries, with no configuration:
 

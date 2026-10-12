@@ -59,7 +59,7 @@ def test_every_flag_is_passed_logged_and_collected(tmp_path, stub, array):
         assert logged[ind] == {**FLAG_LOGGED, **({"k": "7"} if array else {}), "x": x, "save_dir": save}
 
     slurmdunk("collect", tmp_path / "flags.yaml", cwd=tmp_path, check=True)
-    con = sqlite3.connect(root / "flags" / "results.sqlite")
+    con = sqlite3.connect(root / "flags" / "results.db")
     cols = [c[1] for c in con.execute("pragma table_info(runs)")]
     assert set(FLAG_LOGGED) | {"x"} <= set(cols)
 
@@ -111,7 +111,7 @@ def test_positional_array_packed_concurrent(tmp_path, stub):
     assert len(argv) == 8
 
     slurmdunk("collect", config, cwd=tmp_path, check=True)
-    con = sqlite3.connect(root / "posA" / "results.sqlite")
+    con = sqlite3.connect(root / "posA" / "results.db")
     rows = {r[0]: r for r in con.execute("select job_id, rtol, infile, tag, label, result from runs")}
     assert rows["4242_A2_L2"][1:5] == (-3.5, "/data/c.dat", 'a$b"c', "two words")
     assert len(rows) == 8 and {r[5] for r in rows.values()} == {11}  # JSON found via json.path '{resfile}'

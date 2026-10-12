@@ -70,6 +70,7 @@ def folder(tmp_path):
 @pytest.mark.parametrize("words, expected", [
     (["slurmdunk", ""], ["a.yaml", "b.json", "c.yml", "collect", "generate", "sub"]),  # no notes.txt
     (["slurmdunk", "co"], ["collect"]),
+    (["sd", "co"], ["collect"]),                              # the short name
     (["slurmdunk", "--"], ["--help", "--version"]),
     (["slurmdunk", "generate", "--no"], ["--noargcheck", "--nodupcheck", "--notimecheck"]),
     (["slurmdunk", "generate", ""], ["a.yaml", "b.json", "c.yml", "sub"]),

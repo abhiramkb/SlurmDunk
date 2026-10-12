@@ -54,7 +54,7 @@ def test_awkward_flag_values_arrive_literally(tmp_path, stub, array):
         assert logged[ind] == {**AWKWARD, **({"tag": "$x y"} if array else {}), "label": label}
 
     slurmdunk("collect", config, cwd=tmp_path, check=True)
-    con = sqlite3.connect(root / "q" / "results.sqlite")
+    con = sqlite3.connect(root / "q" / "results.db")
     rows = dict(con.execute("select indicator, dollar || '|' || label from runs"))
     first = "A0_L1" if array else "L1"
     assert rows[first] == "$HOME|a b"

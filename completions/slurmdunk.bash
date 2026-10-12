@@ -3,6 +3,7 @@
 # Enable it with bash-completion (loaded on first use):
 #   mkdir -p ~/.local/share/bash-completion/completions
 #   ln -s /path/to/SlurmDunk/completions/slurmdunk.bash ~/.local/share/bash-completion/completions/slurmdunk
+#   ln -s /path/to/SlurmDunk/completions/slurmdunk.bash ~/.local/share/bash-completion/completions/sd
 # or source this file from ~/.bashrc.
 #
 # The word lists below must match src/slurmdunk/cli.py; tests/test_completion.py checks that.
@@ -61,4 +62,4 @@ _slurmdunk() {
     return 0
 }
 
-complete -o filenames -F _slurmdunk slurmdunk
+complete -o filenames -F _slurmdunk slurmdunk sd
