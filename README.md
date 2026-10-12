@@ -25,6 +25,17 @@ python3 -m pip install --user -e /path/to/SlurmDunk
 - **Editable install:** with `-e`, changes to the checkout take effect without reinstalling, and generated scripts record the checkout's git commit.
 - **Without installing:** `python3 -m slurmdunk …` works too, as long as the package is importable.
 
+### Bash completion
+
+`completions/slurmdunk.bash` gives Tab completion for the subcommands, each subcommand's options, the values of `--format`, folders after `--output-dir`, and config files (`.yaml`, `.yml`, `.json`) wherever a config path goes. With bash-completion installed, which most Linux systems load by default, link it into your user completions folder; it is then loaded the first time you press Tab after `slurmdunk`:
+
+```bash
+dir="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+mkdir -p "$dir" && ln -s /path/to/SlurmDunk/completions/slurmdunk.bash "$dir/slurmdunk"
+```
+
+A symlink keeps it in step with the checkout. Without bash-completion, add `source /path/to/SlurmDunk/completions/slurmdunk.bash` to `~/.bashrc` instead. How it works, Roihu specifics and troubleshooting: [docs/bash-completion.md](docs/bash-completion.md).
+
 ## Requirements
 
 **Where `slurmdunk` runs** (usually a login node):
