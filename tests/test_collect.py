@@ -20,6 +20,7 @@ LOGS = {
         [A0_L1_args] alpha: 0.5
         [A0_L1_args] name: run one
         [A0_L1_args] json: {json}/a0l1.json
+        [A0_L1_exec] path: /code/prog_T.jl
         [A0_L1_out] Job started at: Mon Oct  5 12:00:39 AM EEST 2026
         [A0_L1_out] iter 1: value = 1.5
         [A0_L1_err] iter 2: value = 1.25
@@ -30,6 +31,7 @@ LOGS = {
         [A0_L2_args] alpha: 0.75
         [A0_L2_args] verbose:
         [A0_L2_args] json: {json}/a0l2.json
+        [A0_L2_exec] path: /code/prog_L.jl
         [A0_L2_out] Job started at: Mon
         [A0_L2_err] Traceback: boom
         [A0_L2_out] Job finished at: Mon with Exit Code: 3
@@ -38,18 +40,21 @@ LOGS = {
     "syn_500_1.out": """
         [A1_L1_args] alpha: 1.0
         [A1_L1_args] json: {json}/missing.json
+        [A1_L1_exec] path: /code/prog_T.jl
         [A1_L1_out] Job started at: Mon
         [A1_L1_out] iter 1: value = 9
         [PARTIAL] ---- incomplete output for A1_L1 (job interrupted) ----
         """,
     "syn_5001.out": """
         [L1_args] alpha: 2
+        [L1_exec] path:
         [L1_out] Job started at: Mon
         [L1_out] Job finished at: Mon with Exit Code: 0
         [L1_out] Job duration: 1.000 seconds
         """,
     "syn_600.out": """
         [SINGLE_args] alpha: 3
+        [SINGLE_args] executable: mine
         [SINGLE_out] Job started at: Mon
         [SINGLE_out] iter 1: value = 7
         [SINGLE_out] Job finished at: Mon with Exit Code: 0
@@ -122,6 +127,14 @@ def test_rows_patterns_and_json(tmp_path, experiment_dir):
         "500_A1_L1": "interrupted", "600_SINGLE": "completed"}
     assert rows["500_A0_L2"]["exit_code"] == 3 and rows["500_A1_L1"]["exit_code"] is None
     assert rows["500_A0_L1"]["job_duration"] == 21.004 and rows["500_A1_L1"]["array_task_id"] == 1
+
+    # [<run>_exec] path -> 'executable', right after the run info; empty when not logged or empty,
+    # and an argument of that name keeps its value under 'arg.executable'
+    assert cols[7] == "executable"
+    assert {k: r["executable"] for k, r in rows.items()} == {
+        "5001_L1": None, "500_A0_L1": "/code/prog_T.jl", "500_A0_L2": "/code/prog_L.jl",
+        "500_A1_L1": "/code/prog_T.jl", "600_SINGLE": None}
+    assert rows["600_SINGLE"]["arg.executable"] == "mine"
 
     r = rows["500_A0_L1"]
     assert (r["value"], r["first_value"], r["all_values"], r["err_value"], r["tag"]) == \

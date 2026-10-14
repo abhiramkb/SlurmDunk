@@ -1,6 +1,7 @@
 """Generate -> run the script under bash with a stub executable -> check what the
 program received, what was logged, the checkpoints, and what 'collect' finds."""
 import itertools
+import os
 import re
 import sqlite3
 
@@ -62,6 +63,52 @@ def test_every_flag_is_passed_logged_and_collected(tmp_path, stub, array):
     con = sqlite3.connect(root / "flags" / "results.db")
     cols = [c[1] for c in con.execute("pragma table_info(runs)")]
     assert set(FLAG_LOGGED) | {"x"} <= set(cols)
+
+
+# --------------------------------------------------------------------------- executable
+
+
+@pytest.mark.parametrize("mode", ["single", "inner", "array_concurrent", "bare_command"])
+def test_executable_is_logged_and_collected(tmp_path, stub, mode):
+    """Every run logs '[<run>_exec] path: ...', with git provenance off too, and collect makes it
+    the 'executable' column. A bare command is resolved on PATH when the job runs."""
+    root = tmp_path / "db"
+    executable, expected, env = str(stub), str(stub.resolve()), {}
+    if mode == "bare_command":
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        (bindir / "mytool").write_text(stub.read_text())
+        (bindir / "mytool").chmod(0o755)
+        executable, expected = "mytool", str(bindir / "mytool")
+        env = {"PATH": f"{bindir}:{os.environ['PATH']}"}
+    cfg = {
+        "execution": {"executable": executable, "git_provenance": False},
+        "slurm": SLURM,
+        "experiment": experiment(root, "ex"),
+        "args": {"n": 1},
+    }
+    if mode != "single":
+        cfg["inner_loop"] = {"type": "explicit", "arg_name": "x", "values": [1, 2]}
+    if mode == "array_concurrent":
+        cfg["outer_loops"] = [{"type": "explicit", "arg_name": "k", "values": [7, 8]}]
+        cfg["execution"]["multithreading_level"] = 1
+        cfg["slurm"] = {**SLURM, "num_array_jobs": 1, "cpus-per-task": 2}
+    config = write_config(tmp_path / "ex.yaml", cfg)
+    script, out = generate(config, tmp_path / "gen")
+    assert script, out
+    log = root / "ex" / "SLURM_OUTPUT" / ("ex_4242_0.out" if mode == "array_concurrent" else "ex_4243.out")
+    assert run_script(script, log, tmp_path, **env) == 0
+
+    runs = {"single": ["SINGLE"], "inner": ["L1", "L2"], "bare_command": ["L1", "L2"],
+            "array_concurrent": ["A0_L1", "A0_L2", "A1_L1", "A1_L2"]}[mode]
+    assert dict(re.findall(r"^\[(\w+?)_exec\] path: (.*)$", log.read_text(), re.M)) == \
+        {run: expected for run in runs}
+    assert set(parse_log(log)[0]) == set(runs)  # the program ran for every run
+
+    slurmdunk("collect", config, cwd=tmp_path, check=True)
+    con = sqlite3.connect(root / "ex" / "results.db")
+    assert [c[1] for c in con.execute("pragma table_info(runs)")][7] == "executable"
+    assert dict(con.execute("select indicator, executable from runs")) == {run: expected for run in runs}
 
 
 # --------------------------------------------------------------------------- positional

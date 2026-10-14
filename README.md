@@ -550,6 +550,7 @@ Every row always carries, with no configuration:
 | `indicator`, `array_task_id`, `log_file` | Which run, array task and log file the row came from. |
 | `status`, `exit_code` | `completed` (exit 0), `failed` (non-zero exit) or `interrupted` (started but never finished: walltime, cancellation, node failure). |
 | `job_duration` | Seconds, from the script's own timing line. |
+| `executable` | The absolute path of the executable the run used (the program file, or the script given to the interpreter), from its `[<indicator>_exec] path: …` line. It tells runs of different programs apart when they share an experiment, e.g. the T and L variants of a code. A bare command is resolved on `PATH` when the job runs. Present when the logs contain it. |
 | `git_repo`, `git_commit`, `git_repo_dirty`, `git_exec_dirty` | The executable's [git provenance](#git-provenance) for that run; empty when it is not in a git repository. Present when the logs contain it. |
 | one column per argument | Every argument passed to the executable, whether spelled `-x` or `--beta`, is logged as a `[<indicator>_args] <name>: <value>` line and becomes a column, e.g. `x`, `beta`, `save_dir`. Numbers are stored as numbers; a switch printed without a value is stored as true. An argument named like one of the columns above becomes `arg.<name>`. |
 
@@ -623,7 +624,7 @@ collect:
 
 ## Log Output & Stream Tagging
 
-Generated scripts print a run legend, then tag every stream line with its run indicator and report nanosecond-precision timing:
+Generated scripts print a run legend, then tag every stream line with its run indicator and report nanosecond-precision timing. Before each run they log its arguments (`_args`), the executable it uses (`_exec`) and that executable's [git provenance](#git-provenance) (`_git`):
 
 ```text
 ======================= SLURM ARRAY RUN LEGEND =======================
@@ -638,6 +639,11 @@ Executing Subtasks: 40 / 100 Outer Runs
 ======================================================================
 [A0_L1_args] Q: 1.0
 [A0_L1_args] x: 0.001
+[A0_L1_exec] path: /projappl/lappi/abhiram/NLO_Diffraction_dip-dip/sf_nlo_sdaw_dip_L.jl
+[A0_L1_git] repo: /projappl/lappi/abhiram/NLO_Diffraction_dip-dip
+[A0_L1_git] commit: 3f9c2e1d…
+[A0_L1_git] repo_dirty: false
+[A0_L1_git] exec_dirty: false
 [A0_L1_out] Job started at: Fri Aug  7 14:00:00 EEST 2026
 [A0_L1_out] Job finished at: Fri Aug  7 14:00:02 EEST 2026
 [A0_L1_out] Job duration: 2.104 seconds
@@ -668,7 +674,7 @@ It is recorded before every run rather than once per job, so an edit made while 
 
 `collect` turns these lines into the columns `git_repo`, `git_commit`, `git_repo_dirty` and `git_exec_dirty`. If your program also writes a `git_commit` into its JSON output, the two merge into one column when they agree, and the program's value keeps its dotted path when they don't.
 
-Set `execution.git_provenance: false` to turn it off; the generated script is then exactly what it would be without the feature.
+Set `execution.git_provenance: false` to turn it off; the generated script then has no git calls. The `[<indicator>_exec] path: …` line naming the executable is logged either way.
 
 ---
 

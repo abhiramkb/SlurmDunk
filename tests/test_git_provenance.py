@@ -64,8 +64,9 @@ def test_clean_repository(tmp_path, repo):
     slurmdunk("collect", config, cwd=tmp_path, check=True)
     con = sqlite3.connect(tmp_path / "db" / "g" / "results.db")
     cols = [c[1] for c in con.execute("pragma table_info(runs)")]
-    assert cols[7:11] == ["git_repo", "git_commit", "git_repo_dirty", "git_exec_dirty"]
-    assert set(con.execute("select git_commit, git_repo_dirty, git_exec_dirty from runs")) == {(head, 0, 0)}
+    assert cols[7:12] == ["executable", "git_repo", "git_commit", "git_repo_dirty", "git_exec_dirty"]
+    assert set(con.execute("select executable, git_commit, git_repo_dirty, git_exec_dirty from runs")) == \
+        {(str((repo / "prog.sh").resolve()), head, 0, 0)}
 
 
 @pytest.mark.parametrize("change, repo_dirty, exec_dirty", [

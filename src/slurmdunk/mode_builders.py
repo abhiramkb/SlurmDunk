@@ -63,6 +63,7 @@ run_inner_task() {
 @@EXP_ARGS_BLOCK@@
     print_args "$indicator" "@@FIXED_ARGS@@ $outer_args_str $inner_args_str $exp_args"
 @@PRINT_POSITIONALS@@
+    echo "[${indicator}_exec] path: $EXEC_PATH"
 @@RECORD_GIT@@    {
         starttime=$(date +%s%N)
         echo "Job started at: $(date)"
@@ -413,11 +414,11 @@ RECORD_GIT_FN = r'''
 # writing its index, so concurrent runs don't contend for the lock.
 record_git() {
     local ind="$1" dir top commit repo_dirty exec_dirty
-    if [ -z "$GIT_EXEC_PATH" ] || ! command -v git >/dev/null 2>&1; then
+    if [ -z "$EXEC_PATH" ] || ! command -v git >/dev/null 2>&1; then
         echo "[${ind}_git] repo: none"
         return 0
     fi
-    dir=$(dirname "$GIT_EXEC_PATH")
+    dir=$(dirname "$EXEC_PATH")
     if ! top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null); then
         echo "[${ind}_git] repo: none"
         return 0
@@ -428,8 +429,8 @@ record_git() {
         repo_dirty=true
     fi
     exec_dirty=false
-    if ! git -C "$dir" ls-files --error-unmatch -- "$GIT_EXEC_PATH" >/dev/null 2>&1 \
-        || [ -n "$(git --no-optional-locks -C "$dir" status --porcelain -- "$GIT_EXEC_PATH" 2>/dev/null)" ]; then
+    if ! git -C "$dir" ls-files --error-unmatch -- "$EXEC_PATH" >/dev/null 2>&1 \
+        || [ -n "$(git --no-optional-locks -C "$dir" status --porcelain -- "$EXEC_PATH" 2>/dev/null)" ]; then
         exec_dirty=true
     fi
     echo "[${ind}_git] repo: $top"
@@ -439,18 +440,24 @@ record_git() {
 }'''
 
 
-def build_git_provenance(ctx: Dict[str, Any], config: AppConfig) -> Dict[str, str]:
-    """Bash for execution.git_provenance; every fragment is '' when it is off, which
-    keeps such scripts byte-identical to before the feature existed."""
-    if not config.execution.git_provenance:
-        return {"block": "", "call": "", "single": ""}
+def build_exec_path(ctx: Dict[str, Any], config: AppConfig) -> str:
+    """Bash defining EXEC_PATH: the executable file, which every run logs as
+    '[<run>_exec] path: ...' and whose git state record_git reads."""
     exe = str(config.execution.executable)
     if "/" in exe:
         path = bash_double_quote(ctx["exec_path"])
     else:  # a bare command, found on PATH when the job runs
         path = f'"$(command -v {bash_double_quote(exe)} 2>/dev/null)"'
+    return f"\nEXEC_PATH={path}"
+
+
+def build_git_provenance(ctx: Dict[str, Any], config: AppConfig) -> Dict[str, str]:
+    """Bash for execution.git_provenance; every fragment is '' when it is off.
+    record_git reads EXEC_PATH, from build_exec_path."""
+    if not config.execution.git_provenance:
+        return {"block": "", "call": "", "single": ""}
     return {
-        "block": f"\n\nGIT_EXEC_PATH={path}" + RECORD_GIT_FN,
+        "block": "\n" + RECORD_GIT_FN,
         "call": '    record_git "$indicator"\n',
         "single": '\nrecord_git "$indicator"',
     }
@@ -620,7 +627,7 @@ def build_single_mode(ctx: Dict[str, Any], config: AppConfig) -> Optional[str]:
 cd "{ctx['exec_dir']}" || exit 1
 
 indicator="SINGLE"
-EXEC_SIG="{ctx['exec_sig_bash']}"{pos['block']}{git['block']}
+EXEC_SIG="{ctx['exec_sig_bash']}"{build_exec_path(ctx, config)}{pos['block']}{git['block']}
 exec_hash=$(printf '%s' "$EXEC_SIG" | md5sum | cut -d ' ' -f 1)
 CHECKPOINT_FILE="$CHECKPOINT_DIR/${{indicator}}_${{exec_hash}}.done"
 
@@ -638,7 +645,8 @@ echo "Flags: {ctx['fixed_args_bash']}"{pos['legend']}
 echo "================================================================"
 
 {ctx['exp_args_block']}
-print_args "$indicator" "{ctx['fixed_args_bash']} $exp_args"{pos['single']}{git['single']}
+print_args "$indicator" "{ctx['fixed_args_bash']} $exp_args"{pos['single']}
+echo "[${{indicator}}_exec] path: $EXEC_PATH"{git['single']}
 
 {{
     starttime=$(date +%s%N)
@@ -777,7 +785,7 @@ def build_inner_loop_mode(ctx: Dict[str, Any], config: AppConfig) -> Optional[st
 # Navigate to executable directory to preserve repo/git context
 cd "{ctx['exec_dir']}" || exit 1
 
-EXEC_SIG="{ctx['exec_sig_bash']}"{pos['block']}{git['block']}
+EXEC_SIG="{ctx['exec_sig_bash']}"{build_exec_path(ctx, config)}{pos['block']}{git['block']}
 
 # No outer loop in this mode; the shared inner driver expects the variable.
 outer_args_str=""
@@ -933,7 +941,7 @@ def build_job_array_mode(
 # Navigate to executable directory to preserve repo/git context
 cd "{ctx['exec_dir']}" || exit 1
 
-EXEC_SIG="{ctx['exec_sig_bash']}"{pos['block']}{git['block']}
+EXEC_SIG="{ctx['exec_sig_bash']}"{build_exec_path(ctx, config)}{pos['block']}{git['block']}
 
 # Complete outer loop array indexed by original task IDs
 OUTER_ARGS=(
