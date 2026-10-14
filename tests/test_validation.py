@@ -42,6 +42,25 @@ def test_collect_errors(collect, message, capsys):
     assert message in error_of({"collect": collect}, capsys)
 
 
+@pytest.mark.parametrize("switches, expected", [
+    ({}, (True, True)),
+    ({"exec_provenance": False}, (False, True)),
+    ({"git_provenance": False}, (True, False)),
+    ({"provenance": False}, (False, False)),
+    ({"provenance": False, "git_provenance": False}, (False, False)),
+])
+def test_provenance_switches(switches, expected):
+    """provenance: false turns off exec_provenance and git_provenance; each also works alone."""
+    config = validate_config({**BASE, "execution": {**BASE["execution"], **switches}}, "cfg.yaml", True)
+    assert (config.execution.exec_provenance, config.execution.git_provenance) == expected
+
+
+@pytest.mark.parametrize("name", ["exec_provenance", "git_provenance"])
+def test_provenance_off_with_one_asked_for_is_an_error(name, capsys):
+    message = error_of({"execution": {**BASE["execution"], "provenance": False, name: True}}, capsys)
+    assert f"'{name}: true' is also set" in message
+
+
 def test_valid_config_loads():
     config = validate_config({**BASE, "args": {"infile": "a.dat", "n": 3}, "positional_args": ["infile"],
                               "collect": {"patterns": ["time: {t} s"], "json": "{infile}"}}, "cfg.yaml", True)

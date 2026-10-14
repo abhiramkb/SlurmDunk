@@ -148,9 +148,29 @@ class ExecutionConfig(BaseModel):
     multithreading_level: Optional[int] = Field(default=None, ge=1)
     # Optional hard ceiling on concurrency, e.g. to stay within --mem.
     max_parallel_tasks: Optional[int] = Field(default=None, ge=1)
-    # Log the executable's git commit, and whether it or its repository has uncommitted
-    # changes, before every run (see "Git provenance" in README.md).
+    # What is logged about the executable before every run (see "Provenance" in README.md).
+    # provenance: false turns off both of the others.
+    provenance: bool = True
+    # Its path, as '[<run>_exec] path: ...'
+    exec_provenance: bool = True
+    # Its git commit, and whether it or its repository has uncommitted changes
     git_provenance: bool = True
+
+    @model_validator(mode="after")
+    def apply_provenance_switch(self) -> "ExecutionConfig":
+        """provenance: false turns exec_provenance and git_provenance off. Asking for
+        either explicitly at the same time is a contradiction, not a precedence rule."""
+        if self.provenance:
+            return self
+        for name in ("exec_provenance", "git_provenance"):
+            if name in self.model_fields_set and getattr(self, name):
+                raise ValueError(
+                    f"'provenance: false' turns off both exec_provenance and git_provenance, but "
+                    f"'{name}: true' is also set. Drop one of them: to keep only {name}, set "
+                    f"provenance to true and the other one to false."
+                )
+        self.exec_provenance = self.git_provenance = False
+        return self
 
     @field_validator("executable")
     @classmethod

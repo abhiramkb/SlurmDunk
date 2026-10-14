@@ -63,8 +63,7 @@ run_inner_task() {
 @@EXP_ARGS_BLOCK@@
     print_args "$indicator" "@@FIXED_ARGS@@ $outer_args_str $inner_args_str $exp_args"
 @@PRINT_POSITIONALS@@
-    echo "[${indicator}_exec] path: $EXEC_PATH"
-@@RECORD_GIT@@    {
+@@PROVENANCE@@    {
         starttime=$(date +%s%N)
         echo "Job started at: $(date)"
 @@CONCURRENCY_INFO@@
@@ -403,7 +402,7 @@ def build_positional(
 
 
 # ---------------------------------------------------------------------------
-# Git provenance (execution.git_provenance)
+# Provenance (execution.provenance, exec_provenance, git_provenance)
 # ---------------------------------------------------------------------------
 
 RECORD_GIT_FN = r'''
@@ -440,27 +439,35 @@ record_git() {
 }'''
 
 
-def build_exec_path(ctx: Dict[str, Any], config: AppConfig) -> str:
-    """Bash defining EXEC_PATH: the executable file, which every run logs as
-    '[<run>_exec] path: ...' and whose git state record_git reads."""
-    exe = str(config.execution.executable)
+def build_provenance(ctx: Dict[str, Any], config: AppConfig) -> Dict[str, str]:
+    """Bash for execution.exec_provenance and execution.git_provenance (both already off
+    when execution.provenance is false). Every fragment is '' when both are off.
+
+    'path' defines EXEC_PATH, the executable file: exec_provenance logs it before each
+    run as '[<run>_exec] path: ...', and record_git reads its git state. 'block' holds
+    the record_git function, 'call' what each inner-loop run logs, and 'single' the same
+    for a single run.
+    """
+    exec_cfg = config.execution
+    frags = {"path": "", "block": "", "call": "", "single": ""}
+    if not (exec_cfg.exec_provenance or exec_cfg.git_provenance):
+        return frags
+
+    exe = str(exec_cfg.executable)
     if "/" in exe:
         path = bash_double_quote(ctx["exec_path"])
     else:  # a bare command, found on PATH when the job runs
         path = f'"$(command -v {bash_double_quote(exe)} 2>/dev/null)"'
-    return f"\nEXEC_PATH={path}"
+    frags["path"] = f"\nEXEC_PATH={path}"
 
-
-def build_git_provenance(ctx: Dict[str, Any], config: AppConfig) -> Dict[str, str]:
-    """Bash for execution.git_provenance; every fragment is '' when it is off.
-    record_git reads EXEC_PATH, from build_exec_path."""
-    if not config.execution.git_provenance:
-        return {"block": "", "call": "", "single": ""}
-    return {
-        "block": "\n" + RECORD_GIT_FN,
-        "call": '    record_git "$indicator"\n',
-        "single": '\nrecord_git "$indicator"',
-    }
+    if exec_cfg.exec_provenance:
+        frags["call"] += '    echo "[${indicator}_exec] path: $EXEC_PATH"\n'
+        frags["single"] += '\necho "[${indicator}_exec] path: $EXEC_PATH"'
+    if exec_cfg.git_provenance:
+        frags["block"] = "\n" + RECORD_GIT_FN
+        frags["call"] += '    record_git "$indicator"\n'
+        frags["single"] += '\nrecord_git "$indicator"'
+    return frags
 
 
 def fill_positional_tokens(text: str, pos: Dict[str, str]) -> str:
@@ -473,7 +480,7 @@ def build_inner_driver(
     ctx: Dict[str, Any],
     config: AppConfig,
     pos: Dict[str, str],
-    git: Dict[str, str],
+    prov: Dict[str, str],
     indicator_prefix: str = "",
     wrap_outer_loop: bool = False,
 ) -> str:
@@ -516,7 +523,7 @@ def build_inner_driver(
         .replace("@@FIXED_ARGS@@", ctx["fixed_args_bash"])
         .replace("@@CONCURRENCY_INFO@@", concurrency_info)
         .replace("@@EXEC_CMD@@", exec_cmd)
-        .replace("@@RECORD_GIT@@", git["call"]),
+        .replace("@@PROVENANCE@@", prov["call"]),
         pos,
     )
 
@@ -617,7 +624,7 @@ def build_single_mode(ctx: Dict[str, Any], config: AppConfig) -> Optional[str]:
         return None
 
     pos = build_positional(config)
-    git = build_git_provenance(ctx, config)
+    prov = build_provenance(ctx, config)
     exec_cmd = build_exec_command(
         ctx["exec_cfg"], ctx["flags_str"], ctx["fixed_args_bash"], "", pos["exec_slot"]
     )
@@ -627,7 +634,7 @@ def build_single_mode(ctx: Dict[str, Any], config: AppConfig) -> Optional[str]:
 cd "{ctx['exec_dir']}" || exit 1
 
 indicator="SINGLE"
-EXEC_SIG="{ctx['exec_sig_bash']}"{build_exec_path(ctx, config)}{pos['block']}{git['block']}
+EXEC_SIG="{ctx['exec_sig_bash']}"{prov['path']}{pos['block']}{prov['block']}
 exec_hash=$(printf '%s' "$EXEC_SIG" | md5sum | cut -d ' ' -f 1)
 CHECKPOINT_FILE="$CHECKPOINT_DIR/${{indicator}}_${{exec_hash}}.done"
 
@@ -645,8 +652,7 @@ echo "Flags: {ctx['fixed_args_bash']}"{pos['legend']}
 echo "================================================================"
 
 {ctx['exp_args_block']}
-print_args "$indicator" "{ctx['fixed_args_bash']} $exp_args"{pos['single']}
-echo "[${{indicator}}_exec] path: $EXEC_PATH"{git['single']}
+print_args "$indicator" "{ctx['fixed_args_bash']} $exp_args"{pos['single']}{prov['single']}
 
 {{
     starttime=$(date +%s%N)
@@ -777,15 +783,15 @@ def build_inner_loop_mode(ctx: Dict[str, Any], config: AppConfig) -> Optional[st
     arg_names_display = ", ".join(arg_names)
 
     pos = build_positional(config, inner_items=pending_tasks)
-    git = build_git_provenance(ctx, config)
-    inner_driver = build_inner_driver(ctx, config, pos, git, indicator_prefix="")
+    prov = build_provenance(ctx, config)
+    inner_driver = build_inner_driver(ctx, config, pos, prov, indicator_prefix="")
 
     return f"""{ctx['common_header']}
 
 # Navigate to executable directory to preserve repo/git context
 cd "{ctx['exec_dir']}" || exit 1
 
-EXEC_SIG="{ctx['exec_sig_bash']}"{build_exec_path(ctx, config)}{pos['block']}{git['block']}
+EXEC_SIG="{ctx['exec_sig_bash']}"{prov['path']}{pos['block']}{prov['block']}
 
 # No outer loop in this mode; the shared inner driver expects the variable.
 outer_args_str=""
@@ -931,9 +937,9 @@ def build_job_array_mode(
     # output directory. Unpacked they are equal, so existing checkpoints and
     # result directories keep their historical names.
     pos = build_positional(config, outer_combinations, list(enumerate(evaluated_inner, start=1)))
-    git = build_git_provenance(ctx, config)
+    prov = build_provenance(ctx, config)
     inner_driver = build_inner_driver(
-        ctx, config, pos, git, indicator_prefix="A${o_idx}_", wrap_outer_loop=True
+        ctx, config, pos, prov, indicator_prefix="A${o_idx}_", wrap_outer_loop=True
     )
 
     script_content = f"""{header_with_array}
@@ -941,7 +947,7 @@ def build_job_array_mode(
 # Navigate to executable directory to preserve repo/git context
 cd "{ctx['exec_dir']}" || exit 1
 
-EXEC_SIG="{ctx['exec_sig_bash']}"{build_exec_path(ctx, config)}{pos['block']}{git['block']}
+EXEC_SIG="{ctx['exec_sig_bash']}"{prov['path']}{pos['block']}{prov['block']}
 
 # Complete outer loop array indexed by original task IDs
 OUTER_ARGS=(

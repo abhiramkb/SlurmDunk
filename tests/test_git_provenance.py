@@ -1,5 +1,5 @@
 """execution.git_provenance: the executable's git state is logged before every run
-and becomes columns in 'collect'."""
+and becomes columns in 'collect'. Also the switches exec_provenance and provenance."""
 import json
 import shutil
 import sqlite3
@@ -125,9 +125,56 @@ def test_outside_a_repository_and_bare_commands(tmp_path, stub):
     assert logged == {"L1": {"repo": "none"}}
 
 
-def test_off_switch(tmp_path, repo):
-    logged, _, script = run_and_read(tmp_path, repo / "prog.sh", git_provenance=False)
-    assert logged == {} and "record_git" not in script.read_text()
+@pytest.mark.parametrize("switches, exec_logged, git_logged", [
+    ({}, True, True),
+    ({"exec_provenance": False}, False, True),
+    ({"git_provenance": False}, True, False),
+    ({"provenance": False}, False, False),
+])
+def test_switches(tmp_path, repo, switches, exec_logged, git_logged):
+    """Each switch removes its own lines; with both off the script has no provenance code at all."""
+    logged, _, script = run_and_read(tmp_path, repo / "prog.sh", **switches)
+    text = script.read_text()
+    log = (tmp_path / "db" / "g" / "SLURM_OUTPUT" / "g_4243.out").read_text()
+    assert ("[L1_exec] path: " in log) == ("_exec]" in text) == exec_logged
+    assert (logged != {}) == ("record_git" in text) == git_logged
+    assert ("EXEC_PATH" in text) == (exec_logged or git_logged)
+
+    # The same in a single run
+    root = tmp_path / "single_db"
+    config = write_config(tmp_path / "single.yaml", {
+        "execution": {"executable": str(repo / "prog.sh"), **switches},
+        "slurm": SLURM,
+        "experiment": experiment(root, "s"),
+    })
+    script, out = generate(config, tmp_path / "single_gen")
+    assert script, out
+    log = root / "s" / "SLURM_OUTPUT" / "s_4243.out"
+    assert run_script(script, log, tmp_path) == 0
+    assert ("[SINGLE_exec] path: " in log.read_text()) == exec_logged
+    assert ("[SINGLE_git] commit: " in log.read_text()) == git_logged
+    assert ("EXEC_PATH" in script.read_text()) == (exec_logged or git_logged)
+
+
+def test_json_takes_the_column_names_when_logging_is_off(tmp_path, repo):
+    """With provenance off SlurmDunk logs neither, so a program's own JSON 'executable' and
+    'git_commit' get those plain column names instead of their dotted paths."""
+    root = tmp_path / "db"
+    config = write_config(tmp_path / "cfg.yaml", {
+        "execution": {"executable": str(repo / "prog.sh"), "provenance": False},
+        "slurm": SLURM,
+        "experiment": experiment(root, "g", tracking_args={"json": "{save_dir}_{run}/result.json"}),
+        "inner_loop": {"type": "explicit", "arg_name": "x", "values": [1]},
+    })
+    script, _ = generate(config, tmp_path / "gen")
+    assert run_script(script, root / "g" / "SLURM_OUTPUT" / "g_4243.out", tmp_path) == 0
+    (root / "g" / "4243_L1" / "result.json").write_text(
+        json.dumps({"provenance": {"executable": "prog.sh", "git_commit": "0123abc"}}))
+    slurmdunk("collect", config, cwd=tmp_path, check=True)
+    cur = sqlite3.connect(root / "g" / "results.db").execute("select * from runs")
+    row = dict(zip([c[0] for c in cur.description], cur.fetchone()))
+    assert (row["executable"], row["git_commit"]) == ("prog.sh", "0123abc")
+    assert not {"provenance.executable", "provenance.git_commit", "git_repo"} & set(row)
 
 
 def test_json_git_commit_merges_with_the_column(tmp_path, repo):

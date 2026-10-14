@@ -25,7 +25,7 @@ RUN_INFO_COLUMNS = (
     "job_id", "indicator", "array_task_id", "status", "exit_code", "job_duration", "log_file",
 )
 
-# Filled from the [<indicator>_exec] line, when present
+# Filled from the [<indicator>_exec] line (execution.exec_provenance), when present
 EXEC_COLUMNS = ("executable",)
 
 # Filled from the [<indicator>_git] lines (execution.git_provenance), when present
@@ -523,7 +523,13 @@ def collect_results(
         return
 
     pattern_names = [name for spec in patterns for name in pattern_matcher(spec)[1]]
-    reserved = set(pattern_names) | arg_names | set(EXEC_COLUMNS) | set(GIT_COLUMNS)
+    # The provenance columns are kept free for the logged values only while the config logs
+    # them; with logging off, a program's own JSON values may take those names.
+    reserved = set(pattern_names) | arg_names
+    if config.execution.exec_provenance:
+        reserved |= set(EXEC_COLUMNS)
+    if config.execution.git_provenance:
+        reserved |= set(GIT_COLUMNS)
     has_exec = has_git = False
     arg_columns: Dict[str, None] = {}
     json_columns: Dict[str, None] = {}

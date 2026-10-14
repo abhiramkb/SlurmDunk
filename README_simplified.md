@@ -50,7 +50,9 @@ slurmdunk collect "$CFG"             # gather finished results into results.db
 | `collect` | `--output-dir DIR` | You want the results somewhere other than the experiment directory. |
 
 `collect` always records each run's executable, arguments, status, exit code and run time, and, if
-your program lives in a git repository, its commit and whether it had uncommitted changes. To also pull a value
+your program lives in a git repository, its commit and whether it had uncommitted changes. If your
+program records the executable and git state itself, `execution: {provenance: false}` turns that
+logging off (`exec_provenance` / `git_provenance` turn off one of them). To also pull a value
 out of what your code prints, write the line as it appears with `{name}` where the value is:
 
 ```yaml
