@@ -111,6 +111,45 @@ def test_executable_is_logged_and_collected(tmp_path, stub, mode):
     assert dict(con.execute("select indicator, executable from runs")) == {run: expected for run in runs}
 
 
+# --------------------------------------------------------------------------- exit status
+
+
+@pytest.mark.parametrize("mode", ["single", "inner", "inner_concurrent", "inner_one_slot", "array_packed"])
+def test_failed_runs_fail_the_job_and_are_listed_last(tmp_path, mode):
+    """A run exiting non-zero makes the job exit 1 once the epilogue has run, and the
+    log's last line lists every failed run with its exit code."""
+    exe = tmp_path / "fail.sh"
+    exe.write_text('#!/bin/bash\nexit "${@: -1}"\n')  # exits with its last argument
+    exe.chmod(0o755)
+    root = tmp_path / "db"
+    cfg = {
+        "execution": {"executable": str(exe), "epilogue": "echo epilogue ran"},
+        "slurm": SLURM,
+        "experiment": experiment(root, "rc"),
+        "args": {"x": 3} if mode == "single" else {},
+    }
+    if mode != "single":
+        cfg["inner_loop"] = {"type": "explicit", "arg_name": "x", "values": [0, 3, 0, 137]}
+    if mode == "inner_concurrent":
+        cfg["execution"]["multithreading_level"] = 1  # two runs at once on the 2 CPUs
+    if mode == "inner_one_slot":
+        cfg["execution"]["multithreading_level"] = 2  # concurrent driver, one run at a time
+    if mode == "array_packed":
+        cfg["outer_loops"] = [{"type": "explicit", "arg_name": "k", "values": [7, 8]}]
+        cfg["slurm"] = {**SLURM, "num_array_jobs": 1}
+    script, out = generate(write_config(tmp_path / "rc.yaml", cfg), tmp_path / "gen")
+    assert script, out
+    log = root / "rc" / "SLURM_OUTPUT" / ("rc_4242_0.out" if mode == "array_packed" else "rc_4243.out")
+    assert run_script(script, log, tmp_path) == 1
+
+    lines = log.read_text().splitlines()
+    assert lines[-2] == "epilogue ran"
+    prefix = "[FAILED] Non-zero exit codes: "
+    assert lines[-1].startswith(prefix)
+    expected = {"single": ["SINGLE=3"], "array_packed": ["A0_L2=3", "A0_L4=137", "A1_L2=3", "A1_L4=137"]}
+    assert sorted(lines[-1][len(prefix):].split()) == expected.get(mode, ["L2=3", "L4=137"])
+
+
 # --------------------------------------------------------------------------- positional
 
 

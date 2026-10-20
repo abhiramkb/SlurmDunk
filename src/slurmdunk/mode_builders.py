@@ -120,7 +120,8 @@ for idx in "${!INNER_ARGS[@]}"; do
         continue
     fi
 
-    run_inner_task "$line_no" "$inner_args_str" "$outer_args_str" "" "$CHECKPOINT_FILE"@@POS_PARAM@@
+    run_inner_task "$line_no" "$inner_args_str" "$outer_args_str" "" "$CHECKPOINT_FILE"@@POS_PARAM@@ \
+        || FAILED_RUNS+=("$indicator=$?")
 done
 '''
 
@@ -238,7 +239,12 @@ _reap_one() {
     _dump_buffer "$buf"
     _SLOT_FREE+=("$slot")
     _running=$(( _running - 1 ))
-    if [ "$rc" -eq 0 ]; then _ok=$(( _ok + 1 )); else _failed=$(( _failed + 1 )); fi
+    if [ "$rc" -eq 0 ]; then
+        _ok=$(( _ok + 1 ))
+    else
+        _failed=$(( _failed + 1 ))
+        FAILED_RUNS+=("$(basename "$buf" .log)=$rc")
+    fi
     return 0
 }
 '''
@@ -264,7 +270,13 @@ for idx in "${!INNER_ARGS[@]}"; do
     # Degenerate case: stream straight to the log, exactly as the sequential path.
     if [ "$NJOBS" -le 1 ]; then
         run_inner_task "$line_no" "$inner_args_str" "$outer_args_str" "" "$CHECKPOINT_FILE"@@POS_PARAM@@
-        if [ $? -eq 0 ]; then _ok=$(( _ok + 1 )); else _failed=$(( _failed + 1 )); fi
+        _rc=$?
+        if [ $_rc -eq 0 ]; then
+            _ok=$(( _ok + 1 ))
+        else
+            _failed=$(( _failed + 1 ))
+            FAILED_RUNS+=("$indicator=$_rc")
+        fi
         continue
     fi
 
@@ -675,6 +687,7 @@ print_args "$indicator" "{ctx['fixed_args_bash']} $exp_args"{pos['single']}{prov
 }} > >(sed "s/^/[${{indicator}}_out] /") 2> >(sed "s/^/[${{indicator}}_err] /" >&2)
 
 wait
+[ "$EXIT_CODE" -eq 0 ] || FAILED_RUNS+=("$indicator=$EXIT_CODE")
 {ctx['common_footer']}"""
 
 def _evaluate_tabular_rows(block: Union[TabularInnerLoop, TabularOuterLoop]) -> List[Dict[str, Any]]:

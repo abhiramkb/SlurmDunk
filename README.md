@@ -139,7 +139,7 @@ In job array mode the outer combinations form the SLURM array (one task per Cart
 | `modules` | Array | `[]` | `module load` calls emitted before execution. |
 | `env_vars` | Object | `{}` | Exported before execution. Values may reference SLURM variables, e.g. `"$SLURM_CPUS_PER_TASK"`. |
 | `preamble` | String | `null` | Arbitrary, free-form Bash pasted verbatim into the script, after modules/env vars and before execution — e.g. `source`-ing a setup script or building a more complex environment than `modules`/`env_vars` can express. In YAML, use a block scalar (`preamble: \|`) for multi-line content. Processes it starts in the background (e.g. an `nvidia-smi -l 1` monitor) are disowned, so the script does not wait for them: stop them in the `epilogue` via their saved `$!`, or leave them for SLURM to kill when the job ends. |
-| `epilogue` | String | `null` | The counterpart of `preamble`: free-form Bash pasted verbatim at the very end of the script, run once every executable invocation has finished (in parallel mode, after all concurrent runs are drained) — e.g. archiving or post-processing results. It runs in the executable's directory and shares the shell with the preamble, so variables set there are still visible. In array mode it runs at the end of **each** array element, not once after the whole array; use a separate job with `--dependency=afterany:<jobid>` for that. It does not run if the job is killed (walltime, `scancel`), and its last command's exit status becomes the job's. |
+| `epilogue` | String | `null` | The counterpart of `preamble`: free-form Bash pasted verbatim at the very end of the script, run once every executable invocation has finished (in parallel mode, after all concurrent runs are drained) — e.g. archiving or post-processing results. It runs in the executable's directory and shares the shell with the preamble, so variables set there are still visible. In array mode it runs at the end of **each** array element, not once after the whole array; use a separate job with `--dependency=afterany:<jobid>` for that. It does not run if the job is killed (walltime, `scancel`). Its last command's exit status becomes the job's, unless a run failed: then the job exits 1 (see [Failed runs](#failed-runs)). |
 | `multithreading_level` | Integer | `null` | Cores used by **one** invocation of the executable. When set, the inner loop runs `SLURM_CPUS_PER_TASK / multithreading_level` iterations concurrently. Omit for a strictly sequential inner loop. |
 | `max_parallel_tasks` | Integer | `null` | Hard ceiling on concurrent runs, regardless of how many cores are free — mainly to stay within `--mem`. |
 | `provenance` | Boolean | `true` | Common switch for the two below: `false` turns both off; see [Provenance](#provenance). |
@@ -653,6 +653,16 @@ Executing Subtasks: 40 / 100 Outer Runs
 [A0_L3_err] Warning: Convergence threshold near limit.
 [A0_L3_out] Job duration: 1.980 seconds
 ```
+
+### Failed runs
+
+If any run exits non-zero, the job's last output line lists every such run with its exit code, and the job exits 1, so SLURM records it as failed (`sacct`, `--dependency=afterok`):
+
+```text
+[FAILED] Non-zero exit codes: A0_L2=3 A1_L2=137
+```
+
+The line comes after the `epilogue`, which still runs. In array mode each element lists its own runs. A job whose runs all succeed keeps the exit status of the epilogue's last command, or 0 without an epilogue.
 
 ---
 

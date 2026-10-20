@@ -305,21 +305,39 @@ print_args() {
 {level_block}
 {env_var_block}
 {preamble_block}
-{print_args_def}"""
+{print_args_def}
+# Runs that exit non-zero, as <indicator>=<exit code>; listed on the job's last line
+FAILED_RUNS=()
+"""
 
 
 def build_common_footer(exec_cfg: ExecutionConfig) -> str:
-    """Generates the user-supplied epilogue, appended after the last executable run.
+    """Generates the user-supplied epilogue, appended after the last executable run,
+    followed by the job's exit status.
 
     Kept out of build_common_header: array mode rewrites the header line by line,
     and the epilogue has to come after the mode-specific body anyway. The trailing
     newline is forced so an epilogue ending in a heredoc terminator stays valid.
+
+    If any run failed, the job lists those runs on its last output line and exits 1,
+    so SLURM records the job as failed. Otherwise it keeps the exit status of the
+    epilogue's last command (0 without an epilogue).
     """
     epilogue = exec_cfg.epilogue
-    return (
+    epilogue_block = (
         "\n# User-Supplied Epilogue\n" + epilogue.rstrip("\n") + "\n"
         if epilogue else "\n# No epilogue specified\n"
     )
+    return epilogue_block + """
+# Job exit status: 1 if any run failed, listing those runs on the last line;
+# otherwise the exit status of the command above.
+_JOB_RC=$?
+if [ "${#FAILED_RUNS[@]}" -gt 0 ]; then
+    echo "[FAILED] Non-zero exit codes: ${FAILED_RUNS[*]}"
+    exit 1
+fi
+exit "$_JOB_RC"
+"""
 
 
 def warn_about_concurrency(config: AppConfig) -> None:
