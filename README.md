@@ -74,7 +74,7 @@ slurmdunk generate my_config.json --submit
 # Generate without touching SLURM, and skip file-existence checks
 slurmdunk generate my_config.json --dryrun
 
-# Collect one row per run into results.db (and/or results.csv)
+# Collect one row per run (or per JSON file) into results.db (and/or results.csv)
 slurmdunk collect my_config.json
 slurmdunk collect my_config.json --job-id 12345678 --format both
 ```
@@ -542,18 +542,19 @@ Deleting a marker forces the corresponding run to repeat; deleting the `checkpoi
 
 ## Result Collection
 
-`slurmdunk collect my_config.json` reads the SLURM logs under `<result_database_path>/<experiment_name>/<slrm_output_dir>` and writes **one row per run** to `results.db` (table `runs`) and/or `results.csv` in the experiment directory. It works for any executable, because the generated scripts label every line of a run's output with that run (see [Log Output & Stream Tagging](#log-output--stream-tagging)).
+`slurmdunk collect my_config.json` reads the SLURM logs under `<result_database_path>/<experiment_name>/<slrm_output_dir>` and writes **one row per run** to `results.db` (table `runs`) and/or `results.csv` in the experiment directory. A run that writes several JSON files gets one row per file instead (see [JSON output](#json-output)). It works for any executable, because the generated scripts label every line of a run's output with that run (see [Log Output & Stream Tagging](#log-output--stream-tagging)).
 
 Every row always carries, with no configuration:
 
 | Columns | Source |
 | :--- | :--- |
-| `job_id` | `<jobid>_<indicator>`, e.g. `2015127_A89_L51`; the table's primary key. |
+| `job_id` | `<jobid>_<indicator>`, e.g. `2015127_A89_L51`. It is the table's primary key, together with `json_file` when there are JSON files. |
 | `indicator`, `array_task_id`, `log_file` | Which run, array task and log file the row came from. |
 | `status`, `exit_code` | `completed` (exit 0), `failed` (non-zero exit) or `interrupted` (started but never finished: walltime, cancellation, node failure). |
 | `job_duration` | Seconds, from the script's own timing line. |
 | `executable` | The absolute path of the executable the run used (the program file, or the script given to the interpreter), from its `[<indicator>_exec] path: …` line. It tells runs of different programs apart when they share an experiment, e.g. the T and L variants of a code. A bare command is resolved on `PATH` when the job runs. Present when the logs contain it. |
 | `git_repo`, `git_commit`, `git_repo_dirty`, `git_exec_dirty` | The executable's [git provenance](#provenance) for that run; empty when it is not in a git repository. Present when the logs contain it. |
+| `json_file` | The absolute path of the [JSON file](#json-output) the row's JSON values came from; empty for a run without one. Present when any run has a JSON file. |
 | one column per argument | Every argument passed to the executable, whether spelled `-x` or `--beta`, is logged as a `[<indicator>_args] <name>: <value>` line and becomes a column, e.g. `x`, `beta`, `save_dir`. Numbers are stored as numbers; a switch printed without a value is stored as true. An argument named like one of the columns above becomes `arg.<name>`. |
 
 Checkpoint-skipped runs produce no row: a skipped run's row comes from the log of the job that actually ran it. The output is rebuilt on every collect, so re-running after more jobs finish simply picks them up.
@@ -611,7 +612,8 @@ collect:
 ```
 
 - **Placeholders:** the path may use any argument the run printed (`{json}`, `{save_dir}`, …), plus `{job_id}` (the SLURM job ID, as `$JOB_ID` in the script), `{run}` (the run's label, e.g. `A3_L2`; `{indicator}` also works) and `{exp_dir}`. A path that doesn't start with `/` or a placeholder is taken from the config file's folder.
-- **Wildcards:** `*` and `?` pick the first match in sorted order.
+- **Wildcards:** `*` and `?` may match several files, and each one gets its own row.
+- **Several files per run:** a run whose path matches several files gets one row per file, in sorted order. An example is a code that loops over many points in one process and writes one JSON per point. Each row holds its file's values plus the run's own. Status, timing, arguments, provenance and pattern matches belong to the whole run, so they repeat on each of its rows. `json_file` tells the rows apart.
 - **Turning it off:** `json: null` disables JSON collection.
 
 **Column names for JSON values:**
@@ -620,7 +622,7 @@ collect:
 - **Dotted paths:** a leaf keeps its full path (e.g. `metrics.x`) when its name is taken by a different value, when the name occurs twice in the document, or when it matches a pattern or argument name. A top-level key that still clashes gets a `json.` prefix.
 - **Other types:** lists and objects are stored as JSON text, and booleans as 1/0.
 
-**Warnings:** a missing file leaves that run's JSON columns empty. A count of missing files is reported only when `json.path` was set explicitly, while unreadable files are always reported.
+**Warnings:** a missing file leaves that run's JSON columns empty. A file that can't be read still gets its row, with its JSON columns empty. A count of missing files is reported only when `json.path` was set explicitly, while unreadable files are always reported.
 
 ---
 

@@ -5,7 +5,8 @@ indicator ([A3_L2_args], [A3_L2_exec], [A3_L2_git], [A3_L2_out], [A3_L2_err]; se
 print_args and run_inner_task), so a SLURM log can be split into runs without
 knowing anything about the executable. One row is produced per run: its run
 info, executable and arguments always, plus values matched by the config's
-template patterns and the leaves of a per-run JSON file.
+template patterns and the leaves of a per-run JSON file. A run whose JSON path
+matches several files gives one row per file.
 """
 import csv
 import functools
@@ -31,8 +32,12 @@ EXEC_COLUMNS = ("executable",)
 # Filled from the [<indicator>_git] lines (execution.git_provenance), when present
 GIT_COLUMNS = ("git_repo", "git_commit", "git_repo_dirty", "git_exec_dirty")
 
+# The JSON file a row's JSON values came from, when a run has one; part of the key,
+# since a run with several files has one row per file
+JSON_FILE_COLUMNS = ("json_file",)
+
 # Column names that arguments and placeholders may not take
-BUILTIN_COLUMNS = RUN_INFO_COLUMNS + EXEC_COLUMNS + GIT_COLUMNS
+BUILTIN_COLUMNS = RUN_INFO_COLUMNS + EXEC_COLUMNS + GIT_COLUMNS + JSON_FILE_COLUMNS
 
 # Used when the config does not say where a run's JSON is: the per-run directory
 # made by the conventional '{save_dir}_{run}' tracking arg.
@@ -311,25 +316,27 @@ class _StrictFormatDict(dict):
         raise KeyError(key)
 
 
-def load_json(path_template: str, placeholders: Dict[str, str]) -> Tuple[Optional[dict], Optional[str]]:
-    """Returns (document, None), or (None, reason) with reason 'missing' or 'invalid'."""
+def load_jsons(path_template: str, placeholders: Dict[str, str]) -> List[Tuple[str, Optional[dict]]]:
+    """Returns (absolute path, document) for every file the path matches, in sorted order.
+
+    The document is None for a file that is not a JSON object. An empty list means
+    no file was found.
+    """
     try:
         path = path_template.format_map(_StrictFormatDict(placeholders))
     except (KeyError, IndexError, ValueError):
-        return None, "missing"  # the run did not print an argument the path refers to
-    if any(c in path for c in "*?["):
-        matches = sorted(glob(path))
-        if not matches:
-            return None, "missing"
-        path = matches[0]
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            doc = json.load(f)
-    except FileNotFoundError:
-        return None, "missing"
-    except (OSError, ValueError):
-        return None, "invalid"
-    return (doc, None) if isinstance(doc, dict) else (None, "invalid")
+        return []  # the run did not print an argument the path refers to
+    found = []
+    for match in sorted(glob(path)) if any(c in path for c in "*?[") else [path]:
+        try:
+            with open(match, "r", encoding="utf-8") as f:
+                doc = json.load(f)
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            doc = None
+        found.append((os.path.abspath(match), doc if isinstance(doc, dict) else None))
+    return found
 
 
 def _iter_leaves(doc: dict, path: Tuple[str, ...] = ()) -> Iterator[Tuple[Tuple[str, ...], Any]]:
@@ -431,11 +438,17 @@ def table_cells(columns: List[str], rows: List[Dict[str, Any]]) -> Tuple[List[Li
     return cells, types
 
 
-def write_sqlite(path: Path, columns: List[str], cells: List[List[Any]], types: List[str]) -> None:
-    """Rebuilds the 'runs' table from scratch, replacing the file atomically."""
-    col_defs = [f"{_quote(columns[0])} TEXT PRIMARY KEY"] + [
-        f"{_quote(c)} {t}" for c, t in zip(columns[1:], types[1:])
-    ]
+def write_sqlite(
+    path: Path, columns: List[str], cells: List[List[Any]], types: List[str],
+    key: Tuple[str, ...] = ("job_id",),
+) -> None:
+    """Rebuilds the 'runs' table from scratch, replacing the file atomically.
+
+    key is the primary key: job_id, plus json_file when there are JSON files.
+    SQLite allows NULL in it, which json_file is for a run without a file.
+    """
+    col_defs = [f"{_quote(c)} {t}" for c, t in zip(columns, types)]
+    col_defs.append(f"PRIMARY KEY ({', '.join(map(_quote, key))})")
 
     tmp = path.with_name(path.name + ".tmp")
     tmp.unlink(missing_ok=True)
@@ -474,7 +487,8 @@ def collect_results(
     formats: Optional[List[str]] = None,
     output_dir: Optional[str] = None,
 ) -> None:
-    """Collects one row per run from an experiment's SLURM logs.
+    """Collects one row per run from an experiment's SLURM logs, or one per JSON
+    file for a run whose JSON path matches several.
 
     config is the validated AppConfig; arg_names are the argument names the
     config passes to the executable, which placeholder names may not reuse.
@@ -530,12 +544,12 @@ def collect_results(
         reserved |= set(EXEC_COLUMNS)
     if config.execution.git_provenance:
         reserved |= set(GIT_COLUMNS)
-    has_exec = has_git = False
+    has_exec = has_git = has_json_file = False
     arg_columns: Dict[str, None] = {}
     json_columns: Dict[str, None] = {}
     pattern_hits = Counter()
     json_problems = Counter()
-    rows: Dict[str, Dict[str, Any]] = {}
+    runs: Dict[str, List[Dict[str, Any]]] = {}  # each run's rows, by job_id
     duplicates = 0
 
     for log_path, base_job_id, task_id in logs:
@@ -578,39 +592,51 @@ def collect_results(
                     pattern_hits[spec.pattern or spec.regex] += 1
                     row.update(matched)
 
+            run_rows = [row]
             if json_path is not None:
                 # Built-ins take precedence over arguments of the same name
                 placeholders = dict(run["args"])
                 placeholders.update(job_id=base_job_id, run=run["indicator"], indicator=run["indicator"],
                                     exp_dir=str(exp_dir))
-                doc, problem = load_json(json_path, placeholders)
-                if doc is not None:
-                    for column in merge_json(row, doc, reserved):
-                        json_columns.setdefault(column)
+                found = load_jsons(json_path, placeholders)
+                if found:
+                    has_json_file = True
+                    # One row per file, each with the run's own values; an unreadable file
+                    # still gets its row, with its JSON columns empty
+                    run_rows = []
+                    for path, doc in found:
+                        file_row = dict(row, json_file=path)
+                        if doc is not None:
+                            for column in merge_json(file_row, doc, reserved):
+                                json_columns.setdefault(column)
+                        else:
+                            json_problems["invalid"] += 1
+                        run_rows.append(file_row)
                 else:
-                    json_problems[problem] += 1
+                    json_problems["missing"] += 1
 
-            if row["job_id"] in rows:
+            if row["job_id"] in runs:
                 duplicates += 1
-            rows[row["job_id"]] = row
+            runs[row["job_id"]] = run_rows
 
     columns = (
         list(RUN_INFO_COLUMNS) + (list(EXEC_COLUMNS) if has_exec else [])
-        + (list(GIT_COLUMNS) if has_git else []) + list(arg_columns)
+        + (list(GIT_COLUMNS) if has_git else []) + (list(JSON_FILE_COLUMNS) if has_json_file else [])
+        + list(arg_columns)
         + [n for n in pattern_names if n not in arg_columns]
         + [c for c in json_columns if c not in arg_columns and c not in pattern_names]
     )
-    row_list = list(rows.values())
+    row_list = [row for run_rows in runs.values() for row in run_rows]
 
-    statuses = Counter(row["status"] for row in row_list)
+    statuses = Counter(run_rows[0]["status"] for run_rows in runs.values())
     print(
-        f"[INFO] {len(row_list)} run(s) from {len(logs)} log(s): "
+        f"[INFO] {len(runs)} run(s) from {len(logs)} log(s): "
         + (", ".join(f"{statuses[s]} {s}" for s in ("completed", "failed", "interrupted") if statuses[s])
            or "nothing ran")
     )
     for spec in patterns:
         label = spec.pattern or spec.regex
-        print(f"[INFO] Pattern {label!r} matched in {pattern_hits[label]}/{len(row_list)} run(s).")
+        print(f"[INFO] Pattern {label!r} matched in {pattern_hits[label]}/{len(runs)} run(s).")
     if duplicates:
         print(f"[WARNING] {duplicates} run(s) appeared in more than one log; the last occurrence was kept.",
               file=sys.stderr)
@@ -625,7 +651,8 @@ def collect_results(
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = "results" if job_id is None else f"results_{job_id}"
     cells, types = table_cells(columns, row_list)
-    writers = {"sqlite": (write_sqlite, ".db"), "csv": (write_csv, ".csv")}
+    key = ("job_id",) + (JSON_FILE_COLUMNS if has_json_file else ())
+    writers = {"sqlite": (functools.partial(write_sqlite, key=key), ".db"), "csv": (write_csv, ".csv")}
     for fmt in dict.fromkeys(formats):
         writer, suffix = writers[fmt]
         out_path = out_dir / f"{stem}{suffix}"

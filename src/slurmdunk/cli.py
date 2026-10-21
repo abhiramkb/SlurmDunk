@@ -63,8 +63,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     collect = subparsers.add_parser(
         "collect", parents=[common],
-        help="Collect one row per run (arguments, status, timing, values matched by the config's "
-             "'collect' patterns, JSON output) into results.db and/or results.csv."
+        help="Collect one row per run, or per JSON file for runs that write several (arguments, status, "
+             "timing, values matched by the config's 'collect' patterns, JSON output) into results.db "
+             "and/or results.csv."
     )
     collect.add_argument(
         "--job-id", default=None,

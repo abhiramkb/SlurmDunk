@@ -44,7 +44,7 @@ slurmdunk collect "$CFG"             # gather finished results into results.db
 | `generate` | `--noargcheck` | Startup complains your executable doesn't support a flag, but you know it does. |
 | `generate` | `--notimecheck` | You don't want `time` validated against the partition's `MaxTime`. |
 | `generate` | `--nodupcheck` | You really do want to submit a config again while its earlier jobs are still queued or running. |
-| `collect` | *(none)* | Jobs are done and you want one row per run in `results.db`. |
+| `collect` | *(none)* | Jobs are done and you want one row per run (or per JSON file) in `results.db`. |
 | `collect` | `--format both` | You also (or only, with `csv`) want `results.csv`. |
 | `collect` | `--job-id 12345678` | Same, one job only → `results_12345678.*`. |
 | `collect` | `--output-dir DIR` | You want the results somewhere other than the experiment directory. |

@@ -146,6 +146,11 @@ def test_rows_patterns_and_json(tmp_path, experiment_dir):
     assert (r["metrics.x"], r["meta.x"], r["json.status"], r["flag"], r["list"]) == (1, 2, "ok", 1, "[1, 2]")
     assert "No JSON found for 3 run(s)" in out.stderr  # missing file, plus two runs without a json arg
     assert "could not be read" in out.stderr
+    # the file each row's JSON came from, also when it could not be read
+    jdir = tmp_path / "json"
+    assert {k: r["json_file"] for k, r in rows.items()} == {
+        "5001_L1": None, "500_A0_L1": str(jdir / "a0l1.json"), "500_A0_L2": str(jdir / "a0l2.json"),
+        "500_A1_L1": None, "600_SINGLE": None}
 
     with open(tmp_path / "out" / "results.csv", newline="") as f:
         body = list(csv.reader(f))
@@ -204,3 +209,36 @@ def test_default_json_lookup_uses_job_and_run(tmp_path, experiment_dir):
     slurmdunk("collect", cfg, "--output-dir", tmp_path / "o", cwd=tmp_path, check=True)
     rows = load(tmp_path / "o" / "results.db")[1]
     assert rows["500_A0_L1"]["energy"] == -1.5 and rows["500_A0_L2"]["energy"] is None
+
+
+def test_one_row_per_json_file(tmp_path, experiment_dir):
+    # A run that writes one JSON per point into its folder gets one row per file, each also holding
+    # the run's own values. An unreadable file keeps its row; a run without files keeps its single row.
+    run_dir = experiment_dir / "syn" / "500_A0_L1"
+    run_dir.mkdir()
+    for i, beta in enumerate([0.1, 0.2]):
+        (run_dir / f"result_{i}.json").write_text(json.dumps({"parameters": {"beta": beta}, "metrics": {"F": i}}))
+    (run_dir / "result_9.json").write_text("{")
+    cfg = make_config(tmp_path, experiment_dir, {"formats": ["sqlite", "csv"]})
+    out = slurmdunk("collect", cfg, "--output-dir", tmp_path / "o", cwd=tmp_path, check=True)
+    assert "5 run(s) from 4 log(s)" in out.stdout and "Wrote 7 row(s)" in out.stdout
+    assert "1 JSON file(s) could not be read" in out.stderr
+
+    con = sqlite3.connect(tmp_path / "o" / "results.db")
+    cur = con.execute("select * from runs order by job_id, json_file")
+    cols = [c[0] for c in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    assert cols[7:9] == ["executable", "json_file"]
+    assert [(r["job_id"], r["json_file"], r["beta"], r["F"]) for r in rows] == [
+        ("5001_L1", None, None, None),
+        ("500_A0_L1", str(run_dir / "result_0.json"), 0.1, 0),
+        ("500_A0_L1", str(run_dir / "result_1.json"), 0.2, 1),
+        ("500_A0_L1", str(run_dir / "result_9.json"), None, None),
+        ("500_A0_L2", None, None, None), ("500_A1_L1", None, None, None), ("600_SINGLE", None, None, None)]
+    assert {(r["status"], r["job_duration"], r["alpha"]) for r in rows if r["job_id"] == "500_A0_L1"} == \
+        {("completed", 21.004, 0.5)}
+    # (job_id, json_file) is the key, in that order
+    assert [(c[1], c[5]) for c in con.execute("pragma table_info(runs)") if c[5]] == [("job_id", 1), ("json_file", 2)]
+
+    with open(tmp_path / "o" / "results.csv", newline="") as f:
+        assert len(list(csv.reader(f))) == 1 + 7
