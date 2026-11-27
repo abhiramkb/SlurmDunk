@@ -9,6 +9,8 @@ from pydantic import AliasChoices, BaseModel, Field, ValidationError, Validation
 from .collect import BUILTIN_COLUMNS, DEFAULT_JSON_PATH, pattern_matcher
 from .utils import check_positional_value, format_cli_arg
 
+numeric = Union[int, float]
+
 def resolve_config_path(path: Union[str, Path], info: ValidationInfo) -> Path:
     """Makes a relative path absolute, taken from the config file's folder.
 
@@ -63,9 +65,9 @@ class ExplicitLoop(BaseModel):
 class RangeLoop(BaseModel):
     type: Literal["range"]
     arg_name: str
-    start: float
-    stop: float
-    step: float = 1.0
+    start: numeric
+    stop: numeric
+    step: numeric = 1
 
 
 class TabularArgSpec(BaseModel):
